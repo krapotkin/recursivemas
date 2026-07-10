@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments (but keep .venv activation script)
+venv/
+.venv_env/
+env/
+
+# Models and checkpoints (too large for git)
+models/
+custom_impl/checkpoints/
+*.pt
+*.safetensors
+*.bin
+*.ckpt
+*.pth
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs and temp
+*.log
+tmp/
+*.tmp
+
+# Environment variables
+.env
+.env.local
+
+# Cron output
+~/.hermes/cron/
