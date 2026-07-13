@@ -37,34 +37,116 @@
 
 ```
 recursivemas/
-├── README.md        ← Этот файл
-├── AGENTS.md        ← Контекст для агента
-├── INSTALL.md       ← Инструкция по развёртыванию
-├── theory/          ← Теоретические заметки и конспекты
-├── experiments/     ← Воспроизведение результатов из статьи
-│   └── original/    ← Клонированный репозиторий RecursiveMAS (git submodule)
-└── custom_impl/     ← Собственная реализация
-    ├── train_inner.py              ← Inner-Loop Training (Sequential-Math)
-    ├── train_outer.py              ← Outer-Loop Training (Sequential-Math)
-    ├── gsm8k_utils.py              ← Утилиты для оценки на GSM8K
-    ├── evaluate_single_model.py    ← Baseline: одна модель
-    ├── evaluate_text_mas.py        ← Текстовый MAS (Planner -> Critic -> Solver)
-    └── evaluate_recursivemas.py    ← RecursiveMAS (латентная коммуникация)
+├── README.md        <-- Этот файл
+├── AGENTS.md        <-- Контекст для агента
+├── INSTALL.md       <-- Инструкция по развёртыванию
+├── DATA.md          <-- Описание данных и результатов
+├── theory/          <-- Теоретические заметки и конспекты
+├── experiments/     <-- Воспроизведение результатов из статьи
+│   └── original/    <-- Клонированный репозиторий RecursiveMAS (git submodule)
+├── custom_impl/     <-- Собственная реализация
+│   ├── train_inner.py              <-- Inner-Loop Training (Sequential-Math)
+│   ├── train_outer.py              <-- Outer-Loop Training (Sequential-Math)
+│   ├── gsm8k_utils.py              <-- Утилиты для GSM8K (загрузка, парсинг)
+│   ├── evaluate_single_model.py    <-- Baseline: одна модель на GSM8K
+│   ├── evaluate_text_mas.py        <-- Текстовый MAS (Planner -> Refiner -> Solver)
+│   └── evaluate_recursivemas.py    <-- RecursiveMAS (латентная коммуникация)
+└── tests/           <-- Unit-тесты
 ```
 
 ---
 
-## Обучение (Training Pipeline)
+## Запуск процедур
 
-> **Датасет:** `RecursiveMAS/Sequential-Math` (HuggingFace, 1904 примера) — тот же, что в оригинальной статье.
+Все процедуры запускаются с флагом `-u` (unbuffered) и выводом через `tee` — логи видны в реальном времени и сохраняются в файл.
 
-### Запуск с видимыми логами
+**Шаблон запуска:**
 
 ```bash
 cd /home/hermes/workspace/projects/recursivemas
 source .venv
 
-# Inner-Loop Training:
+python3 -u custom_impl/<скрипт>.py [аргументы] \
+    2>&1 | tee ~/workspace/tmp/recursivemas/<имя>.log
+```
+
+**GPU:** cuda:2 (RTX 4060 Ti 16GB)
+**Датасет для обучения:** `RecursiveMAS/Sequential-Math` (1904 примера)
+**Датасет для оценки:** `openai/gsm8k` test split (1319 примеров)
+**Чекпоинты:** `~/workspace/tmp/recursivemas/checkpoints/`
+**Результаты:** `~/workspace/data/recursivemas/results/`
+**Модели:** `~/workspace/models/models_llm/`
+
+---
+
+## 1. Оценка одиночной модели (evaluate_single_model.py)
+
+**Что делает:** Загружает одну модель без адаптеров и оценивает точность на GSM8K test. Базовый baseline для сравнения с MAS-системами.
+
+```bash
+# Qwen2.5-Math-1.5B-Instruct (математическая модель):
+python3 -u custom_impl/evaluate_single_model.py \
+    --model /home/hermes/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct \
+    --num_examples 1319 \
+    --device cuda:2 \
+    --output ~/workspace/data/recursivemas/results/eval_single_qwen25_math_15b.json \
+    2>&1 | tee ~/workspace/tmp/recursivemas/eval_single_qwen25_math_15b.log
+
+# Qwen3-1.7B (общая модель):
+python3 -u custom_impl/evaluate_single_model.py \
+    --model /home/hermes/workspace/models/models_llm/Qwen3-1.7B \
+    --num_examples 1319 \
+    --device cuda:2 \
+    --output ~/workspace/data/recursivemas/results/eval_single_qwen3_17b.json \
+    2>&1 | tee ~/workspace/tmp/recursivemas/eval_single_qwen3_17b.log
+```
+
+**Аргументы:**
+- `--model` — путь к модели (локальный) или имя на HuggingFace
+- `--num_examples` — количество примеров (1319 = полный датасет)
+- `--device` — GPU устройство (cuda:2)
+- `--output` — путь к JSON файлу с результатами
+
+**Время выполнения:** ~2.5-3 часа (1319 примеров)
+
+---
+
+## 2. Оценка текстового MAS (evaluate_text_mas.py)
+
+**Что делает:** Запускает три модели последовательно через текстовую коммуникацию:
+Planner (Qwen3-1.7B) -> Refiner (Qwen3-1.7B) -> Solver (Qwen2.5-Math-1.5B).
+Каждый агент генерирует текст, который передаётся следующему.
+
+```bash
+python3 -u custom_impl/evaluate_text_mas.py \
+    --num_examples 1319 \
+    --device cuda:2 \
+    --output ~/workspace/data/recursivemas/results/eval_text_mas.json \
+    2>&1 | tee ~/workspace/tmp/recursivemas/eval_text_mas.log
+```
+
+**Аргументы:**
+- `--num_examples` — количество примеров (1319 = полный датасет)
+- `--device` — GPU устройство (cuda:2)
+- `--output` — путь к JSON файлу с результатами
+
+**Время выполнения:** ~8-10 часов (1319 примеров, 3 модели последовательно)
+
+---
+
+## 3. Обучение Inner Link (train_inner.py)
+
+**Что делает:** Обучает inner adapter для одной роли. Adapter преобразует hidden state модели обратно в embedding space, позволяя генерировать "латентные мысли".
+
+**Параметры по умолчанию (как в оригинале):**
+- Adapter: `ln_res_adapter` (LayerNorm -> MLP -> residual -> LayerNorm)
+- Loss: Cosine similarity (weight=1.0) + MSE (weight=0.1)
+- Optimizer: AdamW (betas=(0.9, 0.95))
+- Scheduler: Cosine с warmup (10 steps)
+- Learning rate: 5e-4
+
+```bash
+# Planner (Qwen3-1.7B):
 python3 -u custom_impl/train_inner.py \
     --model_name_or_path Qwen/Qwen3-1.7B \
     --mas_role planner \
@@ -75,7 +157,52 @@ python3 -u custom_impl/train_inner.py \
     --device cuda:2 \
     2>&1 | tee ~/workspace/tmp/recursivemas/train_inner_planner.log
 
-# Outer-Loop Training:
+# Refiner (Qwen3-1.7B):
+python3 -u custom_impl/train_inner.py \
+    --model_name_or_path Qwen/Qwen3-1.7B \
+    --mas_role refiner \
+    --dataset_name RecursiveMAS/Sequential-Math \
+    --save_dir ~/workspace/tmp/recursivemas/checkpoints/inner_refiner \
+    --max_steps 20000 \
+    --batch_size 2 \
+    --device cuda:2 \
+    2>&1 | tee ~/workspace/tmp/recursivemas/train_inner_refiner.log
+
+# Solver (Qwen2.5-Math-1.5B-Instruct):
+python3 -u custom_impl/train_inner.py \
+    --model_name_or_path /home/hermes/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct \
+    --mas_role solver \
+    --dataset_name RecursiveMAS/Sequential-Math \
+    --save_dir ~/workspace/tmp/recursivemas/checkpoints/inner_solver \
+    --max_steps 20000 \
+    --batch_size 2 \
+    --device cuda:2 \
+    2>&1 | tee ~/workspace/tmp/recursivemas/train_inner_solver.log
+```
+
+**Дополнительные опции:**
+- `--load_dir` — продолжение обучения с чекпоинта
+- `--grad_accum_steps` — накопление градиентов
+- `--enable_thinking 1` — thinking mode для токенизатора
+- `--solver_pre_question 1` — вопрос перед планом в solver prompt
+- `--adapter_mse_weight 0.1` — вес MSE loss (default: 0.1)
+
+**Время обучения:** ~4-6 часов на роль (20000 steps)
+
+---
+
+## 4. Обучение Outer Link (train_outer.py)
+
+**Что делает:** Соединяет три агента с обученными inner adapters и обучает outer adapters для латентной коммуникации между ними. Градиенты проходят через все рекурсивные итерации.
+
+**Параметры по умолчанию (как в оригинале):**
+- Outer adapter: `outer_ln_res_adapter` (LayerNorm + hidden_dim=out_dim*2 + residual)
+- Loss: CE на solver output, `supervise_final_only=1`
+- Recursive rounds: 3
+- Optimizer: AdamW (betas=(0.9, 0.95))
+- Learning rate: 5e-4
+
+```bash
 python3 -u custom_impl/train_outer.py \
     --agent1_model Qwen/Qwen3-1.7B \
     --agent2_model Qwen/Qwen3-1.7B \
@@ -99,124 +226,63 @@ python3 -u custom_impl/train_outer.py \
     2>&1 | tee ~/workspace/tmp/recursivemas/train_outer.log
 ```
 
-> **Важно:** `-u` принудительно отключает буферизацию Python. Вывод через `tee` — логи видны в реальном времени и сохраняются в файл.
-> **Стиль:** Sequential (Planner -> Refiner/Critic -> Solver)
-> **GPU:** cuda:2 (RTX 4060 Ti 16GB)
-> **Промпты:** оригинальные из `mas_prompt.py`
-
-### Шаг 1: Inner-Loop Training
-
-Обучаем inner adapter для каждой роли отдельно:
-
-```bash
-# Planner (Qwen3-1.7B)
-python custom_impl/train_inner.py \
-    --model_name_or_path Qwen/Qwen3-1.7B \
-    --mas_role planner \
-    --dataset_name RecursiveMAS/Sequential-Math \
-    --save_dir ~/workspace/tmp/recursivemas/checkpoints/inner_planner \
-    --max_steps 20000
-
-# Refiner/Critic (Qwen3-1.7B, замена Llama-3.2-1B)
-python custom_impl/train_inner.py \
-    --model_name_or_path Qwen/Qwen3-1.7B \
-    --mas_role refiner \
-    --dataset_name RecursiveMAS/Sequential-Math \
-    --save_dir ~/workspace/tmp/recursivemas/checkpoints/inner_refiner \
-    --max_steps 20000
-
-# Solver (Qwen2.5-Math-1.5B-Instruct)
-python custom_impl/train_inner.py \
-    --model_name_or_path /home/hermes/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct \
-    --mas_role solver \
-    --dataset_name RecursiveMAS/Sequential-Math \
-    --save_dir ~/workspace/tmp/recursivemas/checkpoints/inner_solver \
-    --max_steps 20000
-```
-
-**Дополнительные опции:**
-
-- `--dataset_name openai/gsm8k` — обучение на GSM8K (для отладки)
-- `--load_dir ckpts/` — продолжение обучения с чекпоинта
-- `--grad_accum_steps 4` — накопление градиентов
-- `--enable_thinking 1` — thinking mode для токенизатора
-- `--solver_pre_question 1` — вопрос перед планом в solver prompt
-
-**Параметры (как в оригинале):**
-
-- `--adapter_lr 5e-4` — learning rate
-- `--lr_scheduler_type cosine` — scheduler
-- `--warmup_steps 10` — warmup
-- `--adapter_cos_weight 1.0` — вес cosine loss
-- `--adapter_mse_weight 0.0` — вес MSE loss (0 по умолчанию)
-- `--dtype bfloat16` — precision
-
-### Шаг 2: Outer-Loop Training
-
-Соединяем агенты и обучаем outer adapters:
-
-```bash
-python custom_impl/train_outer.py \
-    --agent1_model Qwen/Qwen3-1.7B \
-    --agent2_model Qwen/Qwen3-1.7B \
-    --agent3_model /home/hermes/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct \
-    --agent1_inner ~/workspace/tmp/recursivemas/checkpoints/inner_planner \
-    --agent2_inner ~/workspace/tmp/recursivemas/checkpoints/inner_refiner \
-    --agent3_inner ~/workspace/tmp/recursivemas/checkpoints/inner_solver \
-    --save_dir ~/workspace/tmp/recursivemas/checkpoints/outer \
-    --max_steps 20000 \
-    --outer_lr 5e-4 \
-    --num_recursive_rounds 3
-```
-
-**Параметры (как в оригинале):**
-
-- `--max_length 4096` — максимальная длина последовательности
-- `--max_latent_tokens 80` — максимальное количество латентных токенов
-- `--num_recursive_rounds 3` — количество рекурсивных итераций
-- `--supervise_final_only 1` — оптимизировать только последний round
-- `--outer_adapter_type outer_ln_res_adapter` — тип outer adapter (LayerNorm + residual)
-
-### Модели (Sequential Light)
-
-| Роль | Модель | Hidden size | Примечание |
-|------|--------|-------------|------------|
-| Planner | Qwen/Qwen3-1.7B | 2048 | |
-| Refiner/Critic | Qwen/Qwen3-1.7B | 2048 | Замена Llama-3.2-1B (gated repo) |
-| Solver | Qwen2.5-Math-1.5B-Instruct | 1536 | |
+**Время обучения:** ~12-16 часов (20000 steps)
 
 ---
 
-## Оценка (Evaluation)
+## 5. Оценка RecursiveMAS (evaluate_recursivemas.py)
 
-> **Датасет:** GSM8K test split (1319 примеров)
-> **Метрика:** Exact Match (парсинг `#### X`)
+**Что делает:** Запускает полную систему с обученными inner + outer adapters. Агенты обмениваются латентными представлениями напрямую без текстового декодирования.
+
+**Pipeline:** Planner -> inner_1 -> outer_12 -> Refiner -> inner_2 -> outer_23 -> Solver
 
 ```bash
-# Baseline: одна модель
-python custom_impl/evaluate_single_model.py --num_examples 100
-
-# Текстовый MAS (Planner -> Critic -> Solver через текст)
-python custom_impl/evaluate_text_mas.py --num_examples 100
-
-# RecursiveMAS (с обученными адаптерами)
-python custom_impl/evaluate_recursivemas.py \
-    --num_examples 1319 \
-    --outer_checkpoint ~/workspace/tmp/recursivemas/checkpoints/outer/checkpoint-20000/ \
+python3 -u custom_impl/evaluate_recursivemas.py \
+    --agent1_model Qwen/Qwen3-1.7B \
+    --agent2_model Qwen/Qwen3-1.7B \
+    --agent3_model /home/hermes/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct \
     --inner1_checkpoint ~/workspace/tmp/recursivemas/checkpoints/inner_planner/ \
     --inner2_checkpoint ~/workspace/tmp/recursivemas/checkpoints/inner_refiner/ \
     --inner3_checkpoint ~/workspace/tmp/recursivemas/checkpoints/inner_solver/ \
+    --outer_checkpoint ~/workspace/tmp/recursivemas/checkpoints/outer/checkpoint-20000/ \
+    --num_examples 1319 \
     --num_latent_tokens 32 \
-    --num_recursive_rounds 3
+    --num_recursive_rounds 3 \
+    --device cuda:2 \
+    --output ~/workspace/data/recursivemas/results/eval_recursivemas.json \
+    2>&1 | tee ~/workspace/tmp/recursivemas/eval_recursivemas.log
 ```
 
-### Результаты
+**Аргументы:**
+- `--agent[1-3]_model` — модели для Planner, Refiner, Solver
+- `--inner[1-3]_checkpoint` — чекпоинты inner adapters
+- `--outer_checkpoint` — чекпоинт outer adapters
+- `--num_latent_tokens` — количество латентных токенов (32)
+- `--num_recursive_rounds` — рекурсивные итерации (3)
+- `--output` — путь к JSON файлу с результатами
 
-**Реальный результат (2025-07-09):**
+**Время выполнения:** ~12-14 часов (1319 примеров)
 
-- `evaluate_recursivemas.py` с обученными outer adapters (checkpoint-20000): **81.8% (1079/1319)** на GSM8K test (полный датасет)
-- Среднее время: 30.44s/пример
-- Pipeline: Planner -> inner_1 -> outer_12 -> Refiner -> inner_2 -> outer_23 -> Solver
+---
+
+## Модели (Sequential Light)
+
+| Роль | Модель | Hidden size | Путь |
+|------|--------|-------------|------|
+| Planner | Qwen/Qwen3-1.7B | 2048 | `~/workspace/models/models_llm/Qwen3-1.7B/` |
+| Refiner | Qwen/Qwen3-1.7B | 2048 | `~/workspace/models/models_llm/Qwen3-1.7B/` |
+| Solver | Qwen2.5-Math-1.5B-Instruct | 1536 | `~/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct/` |
+
+---
+
+## Результаты оценки
+
+| Метод | Точность | Время/пример | Статус |
+|-------|----------|--------------|--------|
+| Qwen2.5-Math-1.5B (single) | 83.2% (1098/1319) | 7.51s | выполнено |
+| Qwen3-1.7B (single) | в процессе | -- | в процессе |
+| Text MAS (3 модели) | -- | -- | ожидает |
+| RecursiveMAS (latency) | -- | -- | ожидает |
 
 ---
 
@@ -230,7 +296,7 @@ python custom_impl/evaluate_recursivemas.py \
 | Outer adapter | Совместим | `outer_ln_res_adapter` (LayerNorm + hidden_dim=out_dim*2 + residual) |
 | Inner dataset | Совместим | `RecursiveMAS/Sequential-Math` (HuggingFace, 1904 примера) |
 | Outer dataset | Совместим | `RecursiveMAS/Sequential-Math` (HuggingFace, 1904 примера) |
-| Inner loss | Совместим | Cosine similarity (weight=1.0) + MSE (weight=0.0) |
+| Inner loss | Совместим | Cosine similarity (weight=1.0) + MSE (weight=0.1) |
 | Outer loss | Совместим | CE loss на solver output, `supervise_final_only=1` |
 | Prompts | Совместим | Оригинальные из `mas_prompt.py` |
 | Recursive rounds | Совместим | 3 round'а (planner -> refiner -> solver -> feedback) |
