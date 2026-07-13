@@ -8,6 +8,7 @@ import os
 import re
 import json
 import time
+from typing import Optional
 import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -43,20 +44,48 @@ def load_gsm8k_dataset(num_examples=None, split="test"):
 # Парсинг и оценка
 # ============================================================
 
-def parse_answer(text):
-    """Парсинг ответа из формата GSM8K (#### X).
+def parse_answer(text: str) -> Optional[str]:
+    """Парсинг ответа из текста.
 
-    Пробует сначала #### X, затем последний числовой токен.
+    Поддерживает форматы:
+    - #### X (GSM8K стандарт)
+    - \boxed{X} (LaTeX формат)
+    - Fallback: последнее число в тексте
+
+    Returns:
+        Нормализованное числовое значение или None.
     """
     if not text:
         return None
     # Формат GSM8K: #### 42
     match = re.search(r"####\s*(-?[\d,]+\.?\d*)", text)
     if match:
-        return match.group(1).replace(",", "").strip()
-    # Fallback: последний блок чисел
+        return normalize_answer(match.group(1))
+    # Формат LaTeX: \boxed{42}
+    match = re.search(r"\\boxed\{(.+?)\}", text)
+    if match:
+        return normalize_answer(match.group(1))
+    # Fallback: последнее число
     numbers = re.findall(r"-?[\d,]+\.?\d*", text)
-    return numbers[-1].replace(",", "").strip() if numbers else None
+    if numbers:
+        return normalize_answer(numbers[-1])
+    return None
+
+
+def normalize_answer(answer: str) -> str:
+    """Нормализация числового ответа.
+
+    Удаляет запятые, доллары, проценты, извлекает число.
+    """
+    if not answer:
+        return ""
+    # Remove commas, dollars, percent signs
+    answer = re.sub(r"[,$%]", "", answer)
+    # Extract number
+    match = re.search(r"(-?\d+\.?\d*)", answer.strip())
+    if match:
+        return match.group(1)
+    return answer.strip()
 
 
 def compute_accuracy(predictions, gt_numbers, questions=None):
@@ -75,7 +104,10 @@ def compute_accuracy(predictions, gt_numbers, questions=None):
     examples = []
     for i, (pred, gt) in enumerate(zip(predictions, gt_numbers)):
         pred_parsed = parse_answer(pred)
-        is_correct = (pred_parsed == gt)
+        # Нормализуем оба значения для сравнения
+        pred_norm = normalize_answer(pred_parsed) if pred_parsed else ""
+        gt_norm = normalize_answer(str(gt))
+        is_correct = (pred_norm == gt_norm)
         if is_correct:
             correct += 1
         ex = {

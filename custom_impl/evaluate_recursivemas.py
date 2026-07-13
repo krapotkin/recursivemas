@@ -27,7 +27,6 @@ import sys
 import time
 import argparse
 import json
-import re
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -44,6 +43,10 @@ try:
     _datasets.disable_progress_bars()
 except Exception:
     pass
+
+# Унифицированные утилиты из gsm8k_utils
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from gsm8k_utils import parse_answer, normalize_answer, compute_accuracy, print_results, save_results
 
 # ============================================================
 # Модели и конфиг
@@ -333,61 +336,6 @@ def load_gsm8k_test(num_examples: int = 100):
     if num_examples > 0 and num_examples < len(ds):
         ds = ds.select(range(num_examples))
     return ds
-
-
-def parse_answer(text: str) -> str:
-    """Парсит ответ из текста (#### X или \\boxed{X})."""
-    if not text:
-        return ""
-    # Try #### format
-    match = re.search(r'####\s*(.+?)(?:\n|$)', text)
-    if match:
-        return match.group(1).strip()
-    # Try \boxed{} format
-    match = re.search(r'\\boxed\{(.+?)\}', text)
-    if match:
-        return match.group(1).strip()
-    return text.strip()
-
-
-def normalize_answer(answer: str) -> str:
-    """Нормализует числовой ответ."""
-    # Remove commas, dollars, percent signs
-    answer = re.sub(r'[,$%]', '', answer)
-    # Extract number
-    match = re.search(r'(-?\d+\.?\d*)', answer)
-    if match:
-        return match.group(1)
-    return answer
-
-
-def compute_accuracy(predictions, answers):
-    """Вычисляет accuracy."""
-    correct = 0
-    examples = []
-    for i, (pred, ans) in enumerate(zip(predictions, answers)):
-        pred_parsed = parse_answer(pred) if pred else ""
-        pred_norm = normalize_answer(pred_parsed)
-        # Parse GT answer the same way (#### X or \boxed{X})
-        ans_parsed = parse_answer(ans) if ans else ""
-        ans_norm = normalize_answer(ans_parsed)
-        is_correct = pred_norm == ans_norm
-        if is_correct:
-            correct += 1
-        examples.append({
-            "index": i,
-            "prediction": pred,
-            "prediction_parsed": pred_parsed,
-            "answer_parsed": ans_norm,
-            "correct": is_correct,
-        })
-    accuracy = correct / len(predictions) * 100 if predictions else 0
-    return {
-        "accuracy": accuracy,
-        "correct": correct,
-        "total": len(predictions),
-        "examples": examples,
-    }
 
 
 # ============================================================
@@ -736,6 +684,8 @@ def main():
     ds = load_gsm8k_test(args.num_examples)
     questions = ds["question"]
     answers = ds["answer"]
+    # Парсим ground truth ответы
+    gt_numbers = [normalize_answer(parse_answer(a) or "") for a in answers]
     print(f"  Загружено {len(questions)} примеров")
 
     # Run evaluation
@@ -766,23 +716,10 @@ def main():
     print(f"  Обработка {len(questions)}/{len(questions)}... DONE\n")
 
     # Compute accuracy
-    results = compute_accuracy(predictions, answers)
+    results = compute_accuracy(predictions, gt_numbers, questions=questions)
 
     # Print results
-    print("=" * 70)
-    print(f"  Accuracy: {results['accuracy']:.1f}% ({results['correct']}/{results['total']})")
-    avg_time = sum(timings) / len(timings) if timings else 0
-    print(f"  Среднее время на пример: {avg_time:.2f}s")
-    print(f"  Общее время: {sum(timings):.1f}s")
-    print("=" * 70)
-
-    # Examples
-    print(f"\nПримеры (первые 5):")
-    for ex in results["examples"][:5]:
-        status = "OK" if ex["correct"] else "FAIL"
-        pred_short = (ex["prediction"][:60] + "...") if ex["prediction"] and len(ex["prediction"]) > 60 else (ex["prediction"] or "None")
-        print(f"  {status} [{ex['index']}] Pred: {ex['prediction_parsed'] or 'None'}, Ans: {ex['answer_parsed']}")
-        print(f"     Q: {questions[ex['index']][:80]}...")
+    print_results(results, title="RecursiveMAS Evaluation", timings=timings)
 
     # Stage timings
     print(f"\nСреднее время по стадиям:")
@@ -809,7 +746,7 @@ def main():
             ],
             "timings": {
                 "per_example": timings,
-                "avg": avg_time,
+                "avg": sum(timings) / len(timings) if timings else 0,
                 "total": sum(timings),
             },
             "meta": {
