@@ -1,0 +1,22 @@
+[project]
+name = "recursivemas"
+version = "0.1.0"
+description = "Recursive Multi-Agent Systems — reproduction and experiments"
+authors = [{name = "utrobinmv"}]
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["custom_impl"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B"]
+ignore = ["E402"]  # allow module-level imports after docstring
+
+[tool.mypy]
+strict = false
+ignore_missing_imports = true
