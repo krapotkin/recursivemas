@@ -414,7 +414,8 @@ def parse_args() -> argparse.Namespace:
                         help="Adapter dtype (auto = same as model)")
     parser.add_argument("--trust_remote_code", action="store_true", default=True)
     parser.add_argument("--adapter_cos_weight", type=float, default=1.0)
-    parser.add_argument("--adapter_mse_weight", type=float, default=0.0)
+    parser.add_argument("--adapter_mse_weight", type=float, default=0.1,
+                        help="Weight for MSE loss (default: 0.1, as in original)")
     parser.add_argument("--device", type=str, default="cuda:2")
     # Original flags for compatibility
     parser.add_argument("--enable_thinking", type=int, default=0, choices=[0, 1],
@@ -667,7 +668,8 @@ def main():
             # Pairwise alignment: hidden[:, :-1] → target: input_embeds[:, 1:]
             hidden_prev = hidden_states[:, :-1, :]
             target_embeds = input_embeds[:, 1:, :]
-            loss_mask_shifted = loss_mask[:, 1:]
+            # Loss mask: как в оригинале — realign_pair_mask
+            loss_mask_shifted = loss_mask[:, 1:] * attention_mask[:, :-1]
             
             # Применяем adapter
             preds = adapter(hidden_prev)

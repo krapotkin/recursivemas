@@ -27,7 +27,7 @@ def load_gsm8k_dataset(num_examples=None, split="test"):
         dict с ключами 'questions' и 'answers' (ground truth numbers).
     """
     print(f"Загрузка GSM8K ({split})...")
-    dataset = load_dataset("openai/gsm8k", "main", trust_remote_code=True)[split]
+    dataset = load_dataset("openai/gsm8k", "main")[split]
     if num_examples:
         questions = dataset["question"][:num_examples]
         answers = dataset["answer"][:num_examples]
