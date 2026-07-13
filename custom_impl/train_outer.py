@@ -19,7 +19,7 @@ train_outer.py — Outer-Loop Training (воспроизведение ориг�
     python train_outer.py \
         --agent1_model Qwen/Qwen3-1.7B \
         --agent2_model Qwen/Qwen3-1.7B \
-        --agent3_model ./models/Qwen2.5-Math-1.5B-Instruct \
+        --agent3_model /home/hermes/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct \
         --agent1_inner ckpts/planner_math/ \
         --agent2_inner ckpts/refiner_math/ \
         --agent3_inner ckpts/solver_math/ \
@@ -847,7 +847,7 @@ def main():
     optimizer = torch.optim.AdamW(params, lr=args.outer_lr, weight_decay=args.weight_decay, betas=(0.9, 0.95))
 
     # ── Load dataset ─────────────────────────────────────────
-    print(f"\n📚 Loading {args.dataset_name}...")
+    print(f"\nLoading {args.dataset_name}...")
     dataset = load_outer_training_dataset(args.dataset_name, args.dataset_split, args.dataset_json_field)
     needed_cols = {"question", "plan", "refined_plan", "answer"}
     missing = needed_cols.difference(set(dataset.column_names))
@@ -857,7 +857,7 @@ def main():
         dataset = dataset.shuffle(seed=args.seed)
     if args.num_samples > 0:
         dataset = dataset.select(range(min(args.num_samples, len(dataset))))
-    print(f"📊 Dataset size: {len(dataset)}")
+    print(f"Dataset size: {len(dataset)}")
 
     rows = [
         {

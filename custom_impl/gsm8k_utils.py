@@ -26,7 +26,7 @@ def load_gsm8k_dataset(num_examples=None, split="test"):
         dict с ключами 'questions' и 'answers' (ground truth numbers).
     """
     print(f"Загрузка GSM8K ({split})...")
-    dataset = load_dataset("gsm8k", "main", trust_remote_code=True)[split]
+    dataset = load_dataset("openai/gsm8k", "main", trust_remote_code=True)[split]
     if num_examples:
         questions = dataset["question"][:num_examples]
         answers = dataset["answer"][:num_examples]
@@ -106,7 +106,7 @@ def print_results(results, title="Результаты", timings=None):
 
     print("\nПримеры (первые 5):")
     for ex in results["examples"][:5]:
-        status = "✅" if ex["correct"] else "❌"
+        status = "[OK]" if ex["correct"] else "[FAIL]"
         print(f"  {status} [{ex['index']}] Pred: {ex['prediction_parsed']}, Ans: {ex['answer_parsed']}")
 
     errors = [ex for ex in results["examples"] if not ex["correct"]]
@@ -114,7 +114,7 @@ def print_results(results, title="Результаты", timings=None):
         print(f"\nПервые 3 ошибки (из {len(errors)}):")
         for ex in errors[:3]:
             q = ex.get("question", "N/A")[:80]
-            print(f"  ❌ [{ex['index']}] Pred: {ex['prediction_parsed']}, Ans: {ex['answer_parsed']}")
+            print(f"  [FAIL] [{ex['index']}] Pred: {ex['prediction_parsed']}, Ans: {ex['answer_parsed']}")
             print(f"     Q: {q}...")
 
 
@@ -161,7 +161,7 @@ def load_model(model_path, device="cuda:2"):
     )
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
-        torch_dtype=torch.float16,
+        torch_dtype=torch.bfloat16,
         device_map=device,
         trust_remote_code=True,
     )

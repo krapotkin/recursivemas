@@ -34,7 +34,7 @@ from gsm8k_utils import (
 
 # Модели
 PLANNER_MODEL = "Qwen/Qwen3-1.7B"          # Planner + Critic (одна модель)
-SOLVER_MODEL = "/home/hermes/workspace/projects/recursivemas/models/Qwen2.5-Math-1.5B-Instruct"
+SOLVER_MODEL = "/home/hermes/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct"
 DEFAULT_DEVICE = "cuda:2"
 
 # System prompts для каждой роли
@@ -144,7 +144,7 @@ def evaluate_text_mas(num_examples, device, output_path):
         timings.append(elapsed)
         predictions.append(pred)
 
-    print(f"  Обработка {len(questions)}/{len(questions)}... ✅\n")
+    print(f"  Обработка {len(questions)}/{len(questions)}... Done\n")
 
     # Оценка
     results = compute_accuracy(predictions, gt_numbers, questions=questions)

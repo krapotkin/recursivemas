@@ -8,12 +8,13 @@ evaluate_single_model.py — Baseline: тест одной модели на GSM
 Примеры:
     python evaluate_single_model.py --model Qwen/Qwen2.5-Math-1.5B-Instruct --num_examples 100
     python evaluate_single_model.py --model Qwen/Qwen3-1.7B --num_examples 100
-    python evaluate_single_model.py --model ./models/Qwen2.5-Math-1.5B-Instruct --num_examples 100
+    python evaluate_single_model.py --model /home/hermes/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct --num_examples 100
 """
 
+import argparse
 import os
 import sys
-import argparse
+import time
 import torch
 
 # Добавляем custom_impl в путь
@@ -30,7 +31,7 @@ from gsm8k_utils import (
 )
 
 # Пути к моделям по умолчанию
-DEFAULT_MODEL = "./models/Qwen2.5-Math-1.5B-Instruct"
+DEFAULT_MODEL = "/home/hermes/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct"
 DEFAULT_DEVICE = "cuda:2"
 
 
@@ -66,7 +67,6 @@ def evaluate_single(model_path, num_examples, device, output_path):
 
         messages = format_gsm8k_prompt(question, system_msg=system_msg)
 
-        import time
         t0 = time.time()
         pred = generate_answer(
             model, tokenizer, messages, device,
@@ -77,7 +77,7 @@ def evaluate_single(model_path, num_examples, device, output_path):
 
         predictions.append(pred)
 
-    print(f"  Обработка {len(questions)}/{len(questions)}... ✅\n")
+    print(f"  Обработка {len(questions)}/{len(questions)}... Done\n")
 
     # Оценка
     results = compute_accuracy(predictions, gt_numbers, questions=questions)

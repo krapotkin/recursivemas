@@ -50,7 +50,7 @@ except Exception:
 # ============================================================
 PLANNER_MODEL = "Qwen/Qwen3-1.7B"
 REFINER_MODEL = "Qwen/Qwen3-1.7B"  # та же модель, что и Planner
-SOLVER_MODEL = "/home/hermes/workspace/projects/recursivemas/models/Qwen2.5-Math-1.5B-Instruct"
+SOLVER_MODEL = "/home/hermes/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct"
 DEFAULT_DEVICE = "cuda:2"
 
 SYSTEM_PROMPT = "You are a helpful assistant."
@@ -505,7 +505,7 @@ class RecursiveMASEvaluator:
             adapter.load_state_dict(torch.load(adapter_path, map_location="cpu", weights_only=True))
             print(f"  {name} inner: loaded from {path}")
         else:
-            print(f"  ⚠️ {name} inner: no adapter at {path}")
+            print(f"  WARNING: {name} inner: no adapter at {path}")
 
     def _load_outer(self, save_dir):
         """Загружает outer adapters из train_outer.py checkpoint."""

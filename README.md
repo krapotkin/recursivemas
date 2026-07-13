@@ -42,24 +42,14 @@ recursivemas/
 ├── INSTALL.md       ← Инструкция по развёртыванию
 ├── theory/          ← Теоретические заметки и конспекты
 ├── experiments/     ← Воспроизведение результатов из статьи
-│   └── original/    ← Клонированный репозиторий RecursiveMAS
-├── custom_impl/     ← Собственная реализация
-│   ├── train_inner.py              ← Inner-Loop Training (Sequential-Math)
-│   ├── train_outer.py              ← Outer-Loop Training (Sequential-Math)
-│   ├── gsm8k_utils.py              ← Утилиты для оценки на GSM8K
-│   ├── evaluate_single_model.py    ← Baseline: одна модель
-│   ├── evaluate_text_mas.py        ← Текстовый MAS (Planner -> Critic -> Solver)
-│   ├── evaluate_recursivemas.py    ← RecursiveMAS (латентная коммуникация)
-│   │
-│   │ (устаревшие — см. *_ARCHIVE.md)
-│   ├── inner_link_training.py      ← УСТАРЕЛ, заменён на train_inner.py
-│   ├── outer_link_training_v2.py   ← УСТАРЕЛ, заменён на train_outer.py
-│   ├── pregenerate_teacher_data.py ← УСТАРЕЛ, см. pregenerate_teacher_data_ARCHIVE.md
-│   ├── test_pipeline.py            ← Базовые тесты
-│   ├── test_slot_injection.py      ← Тест пайплайна
-│   └── checkpoints/                ← Чекпоинты обученных адаптеров
-├── models/          ← Локальные модели (Qwen2.5-Math-1.5B-Instruct)
-└── notebooks/       ← Jupyter-ноутбуки для исследования
+│   └── original/    ← Клонированный репозиторий RecursiveMAS (git submodule)
+└── custom_impl/     ← Собственная реализация
+    ├── train_inner.py              ← Inner-Loop Training (Sequential-Math)
+    ├── train_outer.py              ← Outer-Loop Training (Sequential-Math)
+    ├── gsm8k_utils.py              ← Утилиты для оценки на GSM8K
+    ├── evaluate_single_model.py    ← Baseline: одна модель
+    ├── evaluate_text_mas.py        ← Текстовый MAS (Planner -> Critic -> Solver)
+    └── evaluate_recursivemas.py    ← RecursiveMAS (латентная коммуникация)
 ```
 
 ---
@@ -79,7 +69,7 @@ python3 -u custom_impl/train_inner.py \
     --model_name_or_path Qwen/Qwen3-1.7B \
     --mas_role planner \
     --dataset_name RecursiveMAS/Sequential-Math \
-    --save_dir custom_impl/checkpoints/inner_planner \
+    --save_dir ~/workspace/tmp/recursivemas/checkpoints/inner_planner \
     --max_steps 20000 \
     --batch_size 2 \
     --device cuda:2 \
@@ -89,11 +79,11 @@ python3 -u custom_impl/train_inner.py \
 python3 -u custom_impl/train_outer.py \
     --agent1_model Qwen/Qwen3-1.7B \
     --agent2_model Qwen/Qwen3-1.7B \
-    --agent3_model ./models/Qwen2.5-Math-1.5B-Instruct \
-    --agent1_inner custom_impl/checkpoints/inner_planner/ \
-    --agent2_inner custom_impl/checkpoints/inner_refiner/ \
-    --agent3_inner custom_impl/checkpoints/inner_solver/ \
-    --save_dir custom_impl/checkpoints/outer/ \
+    --agent3_model /home/hermes/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct \
+    --agent1_inner ~/workspace/tmp/recursivemas/checkpoints/inner_planner/ \
+    --agent2_inner ~/workspace/tmp/recursivemas/checkpoints/inner_refiner/ \
+    --agent3_inner ~/workspace/tmp/recursivemas/checkpoints/inner_solver/ \
+    --save_dir ~/workspace/tmp/recursivemas/checkpoints/outer/ \
     --num_recursive_rounds 3 \
     --max_length 4096 \
     --max_latent_tokens 80 \
@@ -124,7 +114,7 @@ python custom_impl/train_inner.py \
     --model_name_or_path Qwen/Qwen3-1.7B \
     --mas_role planner \
     --dataset_name RecursiveMAS/Sequential-Math \
-    --save_dir custom_impl/checkpoints/inner_planner \
+    --save_dir ~/workspace/tmp/recursivemas/checkpoints/inner_planner \
     --max_steps 20000
 
 # Refiner/Critic (Qwen3-1.7B, замена Llama-3.2-1B)
@@ -132,15 +122,15 @@ python custom_impl/train_inner.py \
     --model_name_or_path Qwen/Qwen3-1.7B \
     --mas_role refiner \
     --dataset_name RecursiveMAS/Sequential-Math \
-    --save_dir custom_impl/checkpoints/inner_refiner \
+    --save_dir ~/workspace/tmp/recursivemas/checkpoints/inner_refiner \
     --max_steps 20000
 
 # Solver (Qwen2.5-Math-1.5B-Instruct)
 python custom_impl/train_inner.py \
-    --model_name_or_path ./models/Qwen2.5-Math-1.5B-Instruct \
+    --model_name_or_path /home/hermes/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct \
     --mas_role solver \
     --dataset_name RecursiveMAS/Sequential-Math \
-    --save_dir custom_impl/checkpoints/inner_solver \
+    --save_dir ~/workspace/tmp/recursivemas/checkpoints/inner_solver \
     --max_steps 20000
 ```
 
@@ -169,11 +159,11 @@ python custom_impl/train_inner.py \
 python custom_impl/train_outer.py \
     --agent1_model Qwen/Qwen3-1.7B \
     --agent2_model Qwen/Qwen3-1.7B \
-    --agent3_model ./models/Qwen2.5-Math-1.5B-Instruct \
-    --agent1_inner custom_impl/checkpoints/inner_planner \
-    --agent2_inner custom_impl/checkpoints/inner_refiner \
-    --agent3_inner custom_impl/checkpoints/inner_solver \
-    --save_dir custom_impl/checkpoints/outer \
+    --agent3_model /home/hermes/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct \
+    --agent1_inner ~/workspace/tmp/recursivemas/checkpoints/inner_planner \
+    --agent2_inner ~/workspace/tmp/recursivemas/checkpoints/inner_refiner \
+    --agent3_inner ~/workspace/tmp/recursivemas/checkpoints/inner_solver \
+    --save_dir ~/workspace/tmp/recursivemas/checkpoints/outer \
     --max_steps 20000 \
     --outer_lr 5e-4 \
     --num_recursive_rounds 3
@@ -212,10 +202,10 @@ python custom_impl/evaluate_text_mas.py --num_examples 100
 # RecursiveMAS (с обученными адаптерами)
 python custom_impl/evaluate_recursivemas.py \
     --num_examples 1319 \
-    --outer_checkpoint custom_impl/checkpoints/outer/checkpoint-20000/ \
-    --inner1_checkpoint custom_impl/checkpoints/inner_planner/ \
-    --inner2_checkpoint custom_impl/checkpoints/inner_refiner/ \
-    --inner3_checkpoint custom_impl/checkpoints/inner_solver/ \
+    --outer_checkpoint ~/workspace/tmp/recursivemas/checkpoints/outer/checkpoint-20000/ \
+    --inner1_checkpoint ~/workspace/tmp/recursivemas/checkpoints/inner_planner/ \
+    --inner2_checkpoint ~/workspace/tmp/recursivemas/checkpoints/inner_refiner/ \
+    --inner3_checkpoint ~/workspace/tmp/recursivemas/checkpoints/inner_solver/ \
     --num_latent_tokens 32 \
     --num_recursive_rounds 3
 ```
@@ -254,16 +244,6 @@ python custom_impl/evaluate_recursivemas.py \
 - **Без accelerate:** используем прямой PyTorch (single GPU)
 - **Претокенизация:** весь датасет токенизируется upfront в inner loop
 - **Дополнительные флаги:** `--grad_accum_steps`, `--load_dir`, `--enable_thinking`, `--solver_pre_question`
-
----
-
-## Архивные файлы
-
-| Файл | Описание |
-|------|----------|
-| `inner_link_training.py` | Первая версия inner training, заменена на `train_inner.py` |
-| `outer_link_training_v2.py` | Упрощённая версия outer training, заменена на `train_outer.py` |
-| `pregenerate_teacher_data.py` | Экспериментальная утилита для генерации teacher data, не используется. См. `pregenerate_teacher_data_ARCHIVE.md` |
 
 ---
 

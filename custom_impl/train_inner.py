@@ -26,7 +26,7 @@ train_inner.py — Inner-Loop Training (воспроизведение ориг�
     python train_inner.py --mas_role refiner --model_name_or_path meta-llama/Llama-3.2-1B-Instruct
 
     # Solver
-    python train_inner.py --mas_role solver --model_name_or_path ./models/Qwen2.5-Math-1.5B-Instruct
+    python train_inner.py --mas_role solver --model_name_or_path /home/hermes/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct
 
     # С GSM8K (для отладки)
     python train_inner.py --mas_role solver --dataset_name openai/gsm8k --model_name_or_path ...
@@ -39,6 +39,7 @@ import argparse
 import json
 import math
 import os
+import re
 import time
 from typing import Optional
 
@@ -159,7 +160,6 @@ def build_math_solver_prompt(question: str, refined_plan: str, solver_pre_questi
 # ============================================================
 # GSM8K helpers (как в оригинале data.py)
 # ============================================================
-import re
 
 def _build_gsm8k_user_prompt(question: str) -> str:
     return (
@@ -532,14 +532,14 @@ def main():
         adapter_path = os.path.join(args.load_dir, "adapter.pt")
         if os.path.isfile(adapter_path):
             adapter.load_state_dict(torch.load(adapter_path, map_location="cpu", weights_only=True))
-            print(f"  ✅ Loaded adapter from {args.load_dir}")
+            print(f"  Loaded adapter from {args.load_dir}")
     
     total_params = sum(p.numel() for p in adapter.parameters())
     model_params = sum(p.numel() for p in model.parameters())
-    print(f"📊 Adapter params: {total_params:,} ({total_params/model_params*100:.2f}%)")
+    print(f"Adapter params: {total_params:,} ({total_params/model_params*100:.2f}%)")
     
     # 4. Загрузка датасета
-    print(f"📚 Loading {args.dataset_name}...")
+    print(f"Loading {args.dataset_name}...")
     is_gsm8k = args.dataset_name.strip().lower() in {"gsm8k", "openai/gsm8k"}
     
     if is_gsm8k:
@@ -549,10 +549,10 @@ def main():
     else:
         dataset = load_dataset_split(args.dataset_name, args.dataset_split, args.dataset_json_field)
     
-    print(f"📊 Dataset size: {len(dataset)}")
+    print(f"Dataset size: {len(dataset)}")
     
     # 5. Токенизация датасета
-    print("🔤 Tokenizing dataset...")
+    print("Tokenizing dataset...")
     tokenized_samples = []
     for i, sample in enumerate(dataset):
         question = sample["question"]
@@ -607,7 +607,7 @@ def main():
         if (i + 1) % 500 == 0:
             print(f"  Tokenized {i+1}/{len(dataset)}...")
     
-    print(f"📊 Tokenized samples: {len(tokenized_samples)}")
+    print(f"Tokenized samples: {len(tokenized_samples)}")
     
     # 6. DataLoader
     dataloader = DataLoader(
