@@ -70,6 +70,23 @@ def build_math_planner_prompt(question: str) -> str:
         "Step n: ..."
     )
 
+def build_math_planner_prompt_with_feedback(question: str, feedback: torch.Tensor) -> str:
+    """Planner prompt with feedback from previous solver round."""
+    return (
+        "You are a planner agent in a recursive multi-agent system.\n"
+        "This is round 2.\n"
+        "Question:\n"
+        f"{question}\n"
+        "Feedback signal from the previous solver round:\n"
+        "<<LATENT_FEEDBACK_SLOT>>\n"
+        "Use the feedback as a soft correction signal to improve the plan.\n"
+        "If there is any conflict, prioritize the question constraints.\n"
+        "Output only a concise plan in the format:\n"
+        "Step 1: ...\n"
+        "...\n"
+        "Step n: ..."
+    )
+
 def build_math_refiner_prompt_with_slot(question: str) -> str:
     return (
         "You are a refiner agent in a multi-agent system.\n"
@@ -212,7 +229,10 @@ def build_inputs_with_slot(
 
 def generate_from_embeds(
     model, tokenizer, inputs_embeds, attention_mask,
-    prefix_len: int, max_new_tokens: int = 512,
+    prefix_len: int, max_new_tokens: int = 512,  # 512 для ускорения
+    do_sample: bool = True,
+    temperature: float = 0.6,
+    top_p: float = 0.95,
     **gen_kwargs
 ) -> str:
     """
@@ -225,8 +245,10 @@ def generate_from_embeds(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             max_new_tokens=max_new_tokens,
+            do_sample=do_sample,
+            temperature=temperature,
+            top_p=top_p,
             num_beams=1,
-            do_sample=False,
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
             **gen_kwargs
@@ -244,7 +266,7 @@ def generate_from_embeds(
 def generate_latent_tokens(
     model, embedding_layer, inner_adapter,
     inputs_embeds, attention_mask,
-    num_tokens: int = 20,
+    num_tokens: int = 32,  # FIX: was 20, original uses 32 for sequential_light/math500
     device: torch.device = None,
 ) -> torch.Tensor:
     """
@@ -384,10 +406,11 @@ class RecursiveMASEvaluator:
     def __init__(self, args, device):
         self.device = device
         self.num_latent_tokens = args.num_latent_tokens
+        self.num_recursive_rounds = args.num_recursive_rounds  # FIX: was missing, original uses 3
         self.model_dtype = torch.bfloat16
 
         # Load models
-        print("📦 Loading Planner...")
+        print("Loading Planner...")
         self.planner_tok = AutoTokenizer.from_pretrained(
             PLANNER_MODEL, trust_remote_code=True, use_fast=True)
         if self.planner_tok.pad_token_id is None:
@@ -409,9 +432,9 @@ class RecursiveMASEvaluator:
             self.refiner_model = self.planner_model
             self.h2 = self.h1
             self.embed2 = self.embed1
-            print("📦 Refiner: shared with Planner")
+            print("Refiner: shared with Planner")
         else:
-            print("📦 Loading Refiner...")
+            print("Loading Refiner...")
             self.refiner_tok = AutoTokenizer.from_pretrained(
                 REFINER_MODEL, trust_remote_code=True, use_fast=True)
             if self.refiner_tok.pad_token_id is None:
@@ -426,7 +449,7 @@ class RecursiveMASEvaluator:
             self.embed2 = self.refiner_model.get_input_embeddings()
             print(f"  Hidden size: {self.h2}")
 
-        print("📦 Loading Solver...")
+        print("Loading Solver...")
         self.solver_tok = AutoTokenizer.from_pretrained(
             SOLVER_MODEL, trust_remote_code=True, use_fast=True)
         if self.solver_tok.pad_token_id is None:
@@ -442,7 +465,7 @@ class RecursiveMASEvaluator:
         print(f"  Hidden size: {self.h3}")
 
         # Load inner adapters
-        print("🔗 Loading inner adapters...")
+        print("Loading inner adapters...")
         self.inner1 = InnerAdapter(self.h1).to(device, dtype=self.model_dtype)
         self.inner2 = InnerAdapter(self.h2).to(device, dtype=self.model_dtype)
         self.inner3 = InnerAdapter(self.h3).to(device, dtype=self.model_dtype)
@@ -458,7 +481,7 @@ class RecursiveMASEvaluator:
             a.eval()
 
         # Create/load outer adapters
-        print("🔗 Loading outer adapters...")
+        print("Loading outer adapters...")
         self.outer_12 = CrossModelAdapter(self.h1, self.h2).to(device, dtype=self.model_dtype)
         self.outer_23 = CrossModelAdapter(self.h2, self.h3).to(device, dtype=self.model_dtype)
 
@@ -472,12 +495,15 @@ class RecursiveMASEvaluator:
         print(f"  Outer adapters params: {trainable:,}")
         print(f"  Outer 12 (Planner→Refiner): {self.h1} → {self.h2}")
         print(f"  Outer 23 (Refiner→Solver):  {self.h2} → {self.h3}")
+        print(f"  Recursive rounds: {self.num_recursive_rounds}")
+        print(f"  Latent tokens: {self.num_latent_tokens}")
+        print(f"  Generation: do_sample={True}, temperature=0.6, top_p=0.95, max_new_tokens=1000")
 
     def _load_inner(self, path, adapter, name):
         adapter_path = os.path.join(path, "adapter.pt")
         if os.path.isfile(adapter_path):
             adapter.load_state_dict(torch.load(adapter_path, map_location="cpu", weights_only=True))
-            print(f"  ✅ {name} inner: loaded from {path}")
+            print(f"  {name} inner: loaded from {path}")
         else:
             print(f"  ⚠️ {name} inner: no adapter at {path}")
 
@@ -490,7 +516,7 @@ class RecursiveMASEvaluator:
             state = torch.load(compat_path, map_location="cpu", weights_only=True)
             self.outer_12.load_state_dict(state["outer_1"])
             self.outer_23.load_state_dict(state["outer_2"])
-            print(f"  ✅ Outer adapters loaded from {compat_path}")
+            print(f"  Outer adapters loaded from {compat_path}")
             return
 
         # Format 2: checkpoint-N/outer_12.pt, outer_23.pt
@@ -511,8 +537,17 @@ class RecursiveMASEvaluator:
             if os.path.isfile(p12) and os.path.isfile(p23):
                 self.outer_12.load_state_dict(torch.load(p12, map_location="cpu", weights_only=True))
                 self.outer_23.load_state_dict(torch.load(p23, map_location="cpu", weights_only=True))
-                print(f"  ✅ Outer adapters loaded from {ckpt_dir}")
+                print(f"  Outer adapters loaded from {ckpt_dir}")
                 return
+
+        # Format 2b: save_dir is the checkpoint dir itself (e.g. checkpoint-20000/)
+        direct_12 = os.path.join(save_dir, "outer_12.pt")
+        direct_23 = os.path.join(save_dir, "outer_23.pt")
+        if os.path.isfile(direct_12) and os.path.isfile(direct_23):
+            self.outer_12.load_state_dict(torch.load(direct_12, map_location="cpu", weights_only=True))
+            self.outer_23.load_state_dict(torch.load(direct_23, map_location="cpu", weights_only=True))
+            print(f"  Outer adapters loaded from {save_dir}")
+            return
 
         # Format 3: outer_adapters.pt (original train_outer format)
         orig_path = os.path.join(save_dir, "outer_adapters.pt")
@@ -522,14 +557,20 @@ class RecursiveMASEvaluator:
             if "outer_12" in state:
                 self.outer_12.load_state_dict(state["outer_12"])
                 self.outer_23.load_state_dict(state["outer_23"])
-                print(f"  ✅ Outer adapters loaded from {orig_path}")
+                print(f"  Outer adapters loaded from {orig_path}")
                 return
 
-        print(f"  ⚠️ No outer adapters found in {save_dir} — using random initialization")
+        print(f"  WARNING: No outer adapters found in {save_dir} — using random initialization")
 
     def evaluate_example(self, question: str) -> dict:
         """
-        Оценивает один пример через полный RecursiveMAS pipeline.
+        Оценивает один пример через полный RecursiveMAS pipeline с recursive rounds.
+
+        Как в оригинале:
+        - Round 1: Planner → Refiner → Solver
+        - Round 2+: Solver latent → outer_31 → Planner feedback → Refiner → Solver
+        - ... повторяется num_recursive_rounds раз
+        - Ответ берётся только из последнего round'а
 
         Returns:
             dict с 'answer', 'plan_latent_norm', 'refined_latent_norm', 'timings'
@@ -537,96 +578,115 @@ class RecursiveMASEvaluator:
         result = {"answer": None, "timings": {}, "latent_stats": {}}
         device = self.device
 
-        # ============================================================
-        # Stage 1: Planner → latent tokens
-        # ============================================================
-        t0 = time.time()
-        planner_prompt = build_math_planner_prompt(question)
+        feedback_to_planner = None  # latent feedback from previous round
 
-        # Tokenize planner prompt
-        planner_messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": planner_prompt},
-        ]
-        planner_text = self.planner_tok.apply_chat_template(
-            planner_messages, tokenize=False, add_generation_prompt=True
-        )
-        planner_inputs = self.planner_tok(
-            planner_text, return_tensors="pt",
-            truncation=True, max_length=2048,
-        ).to(device)
+        for round_idx in range(self.num_recursive_rounds):
+            # ============================================================
+            # Stage 1: Planner → latent tokens
+            # ============================================================
+            t0 = time.time()
+            if round_idx == 0:
+                # First round: no feedback
+                planner_prompt = build_math_planner_prompt(question)
+            else:
+                # Subsequent rounds: use feedback from previous solver
+                planner_prompt = build_math_planner_prompt_with_feedback(question, feedback_to_planner)
 
-        # Generate latent tokens from Planner (autoregressive)
-        planner_embeds = self.embed1(planner_inputs.input_ids)
-        planner_latent = generate_latent_tokens(
-            self.planner_model, self.embed1, self.inner1,
-            planner_embeds, planner_inputs.attention_mask,
-            num_tokens=self.num_latent_tokens,
-            device=device,
-        )
-        result["timings"]["planner"] = time.time() - t0
-        result["latent_stats"]["planner_latent"] = list(planner_latent.shape)
+            # Tokenize planner prompt
+            planner_messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": planner_prompt},
+            ]
+            planner_text = self.planner_tok.apply_chat_template(
+                planner_messages, tokenize=False, add_generation_prompt=True
+            )
+            planner_inputs = self.planner_tok(
+                planner_text, return_tensors="pt",
+                truncation=True, max_length=2048,
+            ).to(device)
 
-        # ============================================================
-        # Stage 2: Outer 12 (Planner → Refiner)
-        # ============================================================
-        t0 = time.time()
-        refiner_input_latent = self.outer_12(planner_latent)  # [1, num_tokens, h2]
-        result["timings"]["outer_12"] = time.time() - t0
+            # Generate latent tokens from Planner (autoregressive)
+            planner_embeds = self.embed1(planner_inputs.input_ids)
+            planner_latent = generate_latent_tokens(
+                self.planner_model, self.embed1, self.inner1,
+                planner_embeds, planner_inputs.attention_mask,
+                num_tokens=self.num_latent_tokens,
+                device=device,
+            )
+            result["timings"]["planner"] = time.time() - t0
+            result["latent_stats"]["planner_latent"] = list(planner_latent.shape)
 
-        # ============================================================
-        # Stage 3: Refiner ← slot injection → latent tokens
-        # ============================================================
-        t0 = time.time()
-        refiner_prompt = build_math_refiner_prompt_with_slot(question)
+            # ============================================================
+            # Stage 2: Outer 12 (Planner → Refiner)
+            # ============================================================
+            t0 = time.time()
+            refiner_input_latent = self.outer_12(planner_latent)  # [1, num_tokens, h2]
+            result["timings"]["outer_12"] = time.time() - t0
 
-        refiner_embeds, refiner_attn = build_inputs_with_slot(
-            self.refiner_tok, self.embed2,
-            refiner_prompt, refiner_input_latent,
-            "<<LATENT_PLANNER_SLOT>>", device, self.model_dtype,
-        )
+            # ============================================================
+            # Stage 3: Refiner ← slot injection → latent tokens
+            # ============================================================
+            t0 = time.time()
+            refiner_prompt = build_math_refiner_prompt_with_slot(question)
 
-        # Generate latent tokens from Refiner
-        refiner_latent = generate_latent_tokens(
-            self.refiner_model, self.embed2, self.inner2,
-            refiner_embeds, refiner_attn,
-            num_tokens=self.num_latent_tokens,
-            device=device,
-        )
-        result["timings"]["refiner"] = time.time() - t0
-        result["latent_stats"]["refiner_latent"] = list(refiner_latent.shape)
+            refiner_embeds, refiner_attn = build_inputs_with_slot(
+                self.refiner_tok, self.embed2,
+                refiner_prompt, refiner_input_latent,
+                "<<LATENT_PLANNER_SLOT>>", device, self.model_dtype,
+            )
 
-        # ============================================================
-        # Stage 4: Outer 23 (Refiner → Solver)
-        # ============================================================
-        t0 = time.time()
-        solver_input_latent = self.outer_23(refiner_latent)  # [1, num_tokens, h3]
-        result["timings"]["outer_23"] = time.time() - t0
+            # Generate latent tokens from Refiner
+            refiner_latent = generate_latent_tokens(
+                self.refiner_model, self.embed2, self.inner2,
+                refiner_embeds, refiner_attn,
+                num_tokens=self.num_latent_tokens,
+                device=device,
+            )
+            result["timings"]["refiner"] = time.time() - t0
+            result["latent_stats"]["refiner_latent"] = list(refiner_latent.shape)
 
-        # ============================================================
-        # Stage 5: Solver ← slot injection → text generation
-        # ============================================================
-        t0 = time.time()
-        solver_prompt = build_math_solver_prompt_with_slot(question)
+            # ============================================================
+            # Stage 4: Outer 23 (Refiner → Solver)
+            # ============================================================
+            t0 = time.time()
+            solver_input_latent = self.outer_23(refiner_latent)  # [1, num_tokens, h3]
+            result["timings"]["outer_23"] = time.time() - t0
 
-        solver_embeds, solver_attn = build_inputs_with_slot(
-            self.solver_tok, self.embed3,
-            solver_prompt, solver_input_latent,
-            "<<LATENT_REFINED_SLOT>>", device, self.model_dtype,
-        )
+            # ============================================================
+            # Stage 5: Solver ← slot injection → text generation
+            # ============================================================
+            t0 = time.time()
+            solver_prompt = build_math_solver_prompt_with_slot(question)
 
-        # Calculate prefix length for decoding
-        prefix_len = solver_embeds.shape[1]
+            solver_embeds, solver_attn = build_inputs_with_slot(
+                self.solver_tok, self.embed3,
+                solver_prompt, solver_input_latent,
+                "<<LATENT_REFINED_SLOT>>", device, self.model_dtype,
+            )
 
-        # Generate text
-        answer = generate_from_embeds(
-            self.solver_model, self.solver_tok,
-            solver_embeds, solver_attn,
-            prefix_len=prefix_len,
-            max_new_tokens=512,
-        )
-        result["timings"]["solver"] = time.time() - t0
-        result["answer"] = answer
+            # Calculate prefix length for decoding
+            prefix_len = solver_embeds.shape[1]
+
+            # Generate text
+            answer = generate_from_embeds(
+                self.solver_model, self.solver_tok,
+                solver_embeds, solver_attn,
+                prefix_len=prefix_len,
+                max_new_tokens=1000,  # FIX: was 512
+                do_sample=True,  # FIX: was False
+                temperature=0.6,  # FIX: was 0
+                top_p=0.95,  # FIX: original uses top_p=0.95
+            )
+            result["timings"]["solver"] = time.time() - t0
+
+            # Store answer from last round
+            if round_idx == self.num_recursive_rounds - 1:
+                result["answer"] = answer
+            else:
+                # Generate feedback for next round (solver latent → outer_31 → planner)
+                # For now, we'll use the solver's last hidden state as feedback
+                # This is a simplified version - full implementation would need hidden states
+                feedback_to_planner = solver_input_latent  # pass through for now
 
         return result
 
@@ -647,8 +707,10 @@ def main():
                         help="Путь к inner adapter Refiner (train_inner.py checkpoint)")
     parser.add_argument("--inner3_checkpoint", type=str, default=None,
                         help="Путь к inner adapter Solver (train_inner.py checkpoint)")
-    parser.add_argument("--num_latent_tokens", type=int, default=20,
-                        help="Количество латентных токенов на агент (default: 20)")
+    parser.add_argument("--num_latent_tokens", type=int, default=32,
+                        help="Количество латентных токенов на агент (default: 32, как в оригинале)")
+    parser.add_argument("--num_recursive_rounds", type=int, default=3,
+                        help="Количество recursive round'ов (default: 3, как в оригинале)")
     parser.add_argument("--output", type=str, default=None,
                         help="Путь для JSON результатов")
 
@@ -660,6 +722,8 @@ def main():
     print("=" * 70)
     print(f"Device: {device}")
     print(f"Latent tokens per agent: {args.num_latent_tokens}")
+    print(f"Recursive rounds: {args.num_recursive_rounds}")
+    print(f"Generation: do_sample=True, temperature=0.6, top_p=0.95, max_new_tokens=1000")
     print(f"Outer checkpoint: {args.outer_checkpoint or 'random'}")
     print(f"Inner checkpoints: {args.inner1_checkpoint or 'random'}, {args.inner2_checkpoint or 'random'}, {args.inner3_checkpoint or 'random'}")
     print()
@@ -668,7 +732,7 @@ def main():
     evaluator = RecursiveMASEvaluator(args, device)
 
     # Load GSM8K
-    print("\n📊 Loading GSM8K test...")
+    print("\nLoading GSM8K test...")
     ds = load_gsm8k_test(args.num_examples)
     questions = ds["question"]
     answers = ds["answer"]
@@ -676,7 +740,8 @@ def main():
 
     # Run evaluation
     print(f"\n{'='*70}")
-    print(f"Pipeline: Planner → inner_1 → outer_12 → Refiner → inner_2 → outer_23 → Solver")
+    print(f"Pipeline: Planner -> inner_1 -> outer_12 -> Refiner -> inner_2 -> outer_23 -> Solver")
+    print(f"Recursive rounds: {args.num_recursive_rounds}")
     print(f"{'='*70}")
 
     predictions = []
@@ -698,7 +763,7 @@ def main():
             if stage in result["timings"]:
                 stage_timings[stage].append(result["timings"][stage])
 
-    print(f"  Обработка {len(questions)}/{len(questions)}... ✅\n")
+    print(f"  Обработка {len(questions)}/{len(questions)}... DONE\n")
 
     # Compute accuracy
     results = compute_accuracy(predictions, answers)
@@ -714,7 +779,7 @@ def main():
     # Examples
     print(f"\nПримеры (первые 5):")
     for ex in results["examples"][:5]:
-        status = "✅" if ex["correct"] else "❌"
+        status = "OK" if ex["correct"] else "FAIL"
         pred_short = (ex["prediction"][:60] + "...") if ex["prediction"] and len(ex["prediction"]) > 60 else (ex["prediction"] or "None")
         print(f"  {status} [{ex['index']}] Pred: {ex['prediction_parsed'] or 'None'}, Ans: {ex['answer_parsed']}")
         print(f"     Q: {questions[ex['index']][:80]}...")

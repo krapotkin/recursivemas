@@ -690,7 +690,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--agent3_inner", type=str, required=True, help="Solver inner adapter path")
     parser.add_argument("--inner_adapter_type_fallback", type=str, default="ln_res_adapter")
 
-    parser.add_argument("--dataset_name", type=str, default="RecursiveMAS/Sequential-Math")
+    parser.add_argument("--dataset_name", type=str, default="RecursiveMAS/Sequential-Math",
+                        help="Training dataset. Default: RecursiveMAS/Sequential-Math (как в оригинале). "
+                             "Поддерживает: RecursiveMAS/Sequential-Math, openai/gsm8k, локальные JSON/JSONL файлы.")
     parser.add_argument("--dataset_split", type=str, default="train")
     parser.add_argument("--dataset_json_field", type=str, default=None)
     parser.add_argument("--num_samples", type=int, default=-1)
@@ -913,6 +915,7 @@ def main():
 
     start_time = time.time()
     skipped_count = 0
+    _accum_counter = 0  # gradient accumulation counter
 
     log_loss = 0.0
     log_r_first = 0.0
@@ -929,7 +932,9 @@ def main():
             valid_count = 0
             batch_loss_sum = 0.0
 
-            optimizer.zero_grad(set_to_none=True)
+            # Zero grads only at start of accumulation cycle
+            if _accum_counter == 0:
+                optimizer.zero_grad(set_to_none=True)
 
             for sample in batch:
                 q = str(sample["question"]).strip()
@@ -1083,7 +1088,8 @@ def main():
                         else:
                             loss = round_losses[-1]
 
-                    (loss / max(args.batch_size, 1)).backward()
+                    # Gradient accumulation: divide loss by grad_accum_steps
+                    (loss / (max(args.batch_size, 1) * args.grad_accum_steps)).backward()
                     valid_count += 1
                     batch_loss_sum += float(loss.item())
                     sample_r_first_losses.append(float(round_losses[0].item()))
@@ -1106,36 +1112,41 @@ def main():
                     if param.grad is not None:
                         param.grad.mul_(grad_scale)
 
-            if args.max_grad_norm > 0:
-                torch.nn.utils.clip_grad_norm_(params, args.max_grad_norm)
-            optimizer.step()
-            scheduler.step()
+            # Gradient accumulation: only step every grad_accum_steps batches
+            _accum_counter += 1
+            if _accum_counter >= args.grad_accum_steps:
+                _accum_counter = 0
+                if args.max_grad_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(params, args.max_grad_norm)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
+                global_step += 1
 
-            global_step += 1
-            loss_batch = batch_loss_sum / valid_count
+                # Logging — only after optimizer step
+                loss_batch = batch_loss_sum / valid_count
+                log_loss += float(loss_batch)
+                log_r_first += sum(sample_r_first_losses) / max(len(sample_r_first_losses), 1)
+                log_r_last += sum(sample_r_last_losses) / max(len(sample_r_last_losses), 1)
+                log_count += 1
 
-            log_loss += float(loss_batch)
-            log_r_first += sum(sample_r_first_losses) / max(len(sample_r_first_losses), 1)
-            log_r_last += sum(sample_r_last_losses) / max(len(sample_r_last_losses), 1)
-            log_count += 1
+                if global_step % args.log_every == 0:
+                    avg_loss = log_loss / max(log_count, 1)
+                    avg_r_first = log_r_first / max(log_count, 1)
+                    avg_r_last = log_r_last / max(log_count, 1)
+                    lr = scheduler.get_last_lr()[0]
+                    elapsed = time.time() - start_time
+                    print(f"step={global_step} loss={avg_loss:.4f} r_first={avg_r_first:.4f} r_last={avg_r_last:.4f} lr={lr:.6f} time={elapsed:.0f}s skipped={skipped_count}", flush=True)
+                    log_loss = 0.0
+                    log_r_first = 0.0
+                    log_r_last = 0.0
+                    log_count = 0
 
-            if global_step % args.log_every == 0:
-                avg_loss = log_loss / max(log_count, 1)
-                avg_r_first = log_r_first / max(log_count, 1)
-                avg_r_last = log_r_last / max(log_count, 1)
-                lr = scheduler.get_last_lr()[0]
-                elapsed = time.time() - start_time
-                print(f"step={global_step} loss={avg_loss:.4f} r_first={avg_r_first:.4f} r_last={avg_r_last:.4f} lr={lr:.6f} time={elapsed:.0f}s skipped={skipped_count}", flush=True)
-                log_loss = 0.0
-                log_r_first = 0.0
-                log_r_last = 0.0
-                log_count = 0
+                if args.save_steps > 0 and global_step % args.save_steps == 0:
+                    save_recursive_outer_checkpoint(args.save_dir, global_step, outer_12, outer_23, outer_31, args)
 
-            if args.save_steps > 0 and global_step % args.save_steps == 0:
-                save_recursive_outer_checkpoint(args.save_dir, global_step, outer_12, outer_23, outer_31, args)
-
-            if global_step >= max_train_steps:
-                break
+                if global_step >= max_train_steps:
+                    break
 
         if global_step >= max_train_steps:
             break
