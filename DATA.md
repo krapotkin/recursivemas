@@ -28,8 +28,8 @@
 | Файл | Метод | Точность | Дата |
 |------|-------|----------|------|
 | `eval_single_qwen25_math_15b_full.json` | Qwen2.5-Math-1.5B (single) | 83.2% (1098/1319) | 2025-07-13 |
-| `eval_single_qwen3_17b_full.json` | Qwen3-1.7B (single) | в процессе | 2025-07-13 |
-| `eval_text_mas.json` | Text MAS (3 модели) | -- | ожидает |
+| `eval_single_qwen3_17b_full.json` | Qwen3-1.7B (single) | 22.3% (294/1319) | 2025-07-13 |
+| `eval_text_mas_full.json` | Text MAS (3 модели) | 85.4% (1127/1319) | 2025-07-13 |
 | `eval_recursivemas.json` | RecursiveMAS (latency) | -- | ожидает |
 
 ## Чекпоинты
