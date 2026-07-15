@@ -30,15 +30,13 @@
 | `eval_single_qwen25_math_15b_full.json` | Qwen2.5-Math-1.5B (single) | 83.2% (1098/1319) | 2025-07-13 |
 | `eval_single_qwen3_17b_full.json` | Qwen3-1.7B (single) | 22.3% (294/1319) | 2025-07-13 |
 | `eval_text_mas_full.json` | Text MAS (3 модели) | 85.4% (1127/1319) | 2025-07-13 |
-| `eval_recursivemas.json` | RecursiveMAS (latency) | -- | ожидает |
+| `eval_recursivemas_full.json` | RecursiveMAS (latency) | 74.9% (988/1319) | 2025-07-13 |
 
 ## Чекпоинты
 
 | Папка | Описание | Статус |
 |-------|----------|--------|
-| `inner_planner/` | Inner adapter для Planner | обучен (старый) |
-| `inner_refiner/` | Inner adapter для Refiner | обучен (старый) |
-| `inner_solver/` | Inner adapter для Solver | обучен (старый) |
-| `outer/` | Outer adapters (checkpoint-20000) | обучен (старый) |
-
-Примечание: старые чекпоинты сохранены в `~/workspace/tmp/recursivemas/old_checkpoints/`.
+| `inner_planner/` | Inner adapter для Planner | обучен (20000 steps) |
+| `inner_refiner/` | Inner adapter для Refiner | обучен (20000 steps) |
+| `inner_solver/` | Inner adapter для Solver | обучен (20000 steps) |
+| `outer/` | Outer adapters (checkpoint-20000) | обучен (20000 steps) |

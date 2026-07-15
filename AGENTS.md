@@ -135,7 +135,7 @@ python3 -u custom_impl/evaluate_recursivemas.py \
 | Qwen2.5-Math-1.5B (single) | 83.2% (1098/1319) | 7.51s | выполнено |
 | Qwen3-1.7B (single) | 22.3% (294/1319) | 15.75s | выполнено |
 | Text MAS (3 модели) | 85.4% (1127/1319) | 23.25s | выполнено |
-| RecursiveMAS (latency) | -- | -- | ожидает |
+| RecursiveMAS (latency) | 74.9% (988/1319) | 32.47s | выполнено |
 
 ### Стратегия оценки качества
 

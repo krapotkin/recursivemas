@@ -8,8 +8,6 @@
 - Клонирование оригинального репозитория в `experiments/original/`
 - Реализация Inner-Loop Training (`train_inner.py`) — совместима с оригиналом
 - Реализация Outer-Loop Training (`train_outer.py`) — полностью переписана, совместима с оригиналом
-- Обучение Inner-Loop (3 роли, 20000 steps каждая)
-- Обучение Outer-Loop (20000 steps)
 - Оценка на GSM8K test: **81.8% accuracy (1079/1319)** — предыдущий результат
 
 ### Выполнена очистка проекта (ветка clean)
@@ -27,7 +25,7 @@
 
 ---
 
-## План повторных замеров
+## Результаты повторных замеров
 
 ### 5.1 evaluate_single_model.py — Baseline
 
@@ -46,28 +44,27 @@
 
 | Этап | Роль | Статус |
 |------|------|--------|
-| Inner-Loop | Planner (Qwen3-1.7B) | ожидает |
-| Inner-Loop | Refiner (Qwen3-1.7B) | ожидает |
-| Inner-Loop | Solver (Qwen2.5-Math-1.5B) | ожидает |
-| Outer-Loop | Все 3 агента | ожидает |
+| Inner-Loop | Planner (Qwen3-1.7B) | выполнено (20000 steps, 1916s) |
+| Inner-Loop | Refiner (Qwen3-1.7B) | выполнено (20000 steps, 2964s) |
+| Inner-Loop | Solver (Qwen2.5-Math-1.5B) | выполнено (20000 steps, 5001s) |
+| Outer-Loop | Все 3 агента | выполнено (20000 steps, 74450s) |
 
 ### 7. evaluate_recursivemas.py — RecursiveMAS
 
-| Метод | Точность | Статус |
-|-------|----------|--------|
-| RecursiveMAS (latency) | -- | ожидает |
+| Метод | Точность | Время/пример | Статус |
+|-------|----------|--------------|--------|
+| RecursiveMAS (latency) | 74.9% (988/1319) | 32.47s | выполнено |
 
 ---
 
 ## Дальнейшие шаги
 
-### Приоритет 1: Завершить повторные замеры
+### Приоритет 1: Улучшение результатов RecursiveMAS
 
-1. Дождаться завершения Qwen3-1.7B baseline
-2. Запустить Text MAS evaluation
-3. Запустить повторное обучение Inner-Loop (3 роли)
-4. Запустить повторное обучение Outer-Loop
-5. Запустить evaluate_recursivemas
+Текущий результат RecursiveMAS (74.9%) ниже Text MAS (85.4%) и single Qwen2.5-Math (83.2%). Возможные причины:
+1. Outer training не дошёл до оптимального (loss ещё не стабилизировался)
+2. Нужно больше шагов обучения (40000+ вместо 20000)
+3. Нужна настройка гиперпараметров (learning rate, batch size)
 
 ### Приоритет 2: Ablation study
 
