@@ -238,13 +238,10 @@ python3 -u custom_impl/train_outer.py \
 
 ```bash
 python3 -u custom_impl/evaluate_recursivemas.py \
-    --agent1_model Qwen/Qwen3-1.7B \
-    --agent2_model Qwen/Qwen3-1.7B \
-    --agent3_model /home/hermes/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct \
     --inner1_checkpoint ~/workspace/tmp/recursivemas/checkpoints/inner_planner/ \
     --inner2_checkpoint ~/workspace/tmp/recursivemas/checkpoints/inner_refiner/ \
     --inner3_checkpoint ~/workspace/tmp/recursivemas/checkpoints/inner_solver/ \
-    --outer_checkpoint ~/workspace/tmp/recursivemas/checkpoints/outer/checkpoint-20000/ \
+    --outer_checkpoint ~/workspace/tmp/recursivemas/checkpoints/outer/ \
     --num_examples 1319 \
     --num_latent_tokens 32 \
     --num_recursive_rounds 3 \
@@ -254,7 +251,6 @@ python3 -u custom_impl/evaluate_recursivemas.py \
 ```
 
 **Аргументы:**
-- `--agent[1-3]_model` — модели для Planner, Refiner, Solver
 - `--inner[1-3]_checkpoint` — чекпоинты inner adapters
 - `--outer_checkpoint` — чекпоинт outer adapters
 - `--num_latent_tokens` — количество латентных токенов (32)
