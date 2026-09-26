@@ -7,8 +7,10 @@
 ## Шаг 1 — Клонирование репозитория
 
 ```bash
-cd ~/workspace/projects/recursivemas/experiments
-git clone https://github.com/RecursiveMAS/RecursiveMAS.git original
+cd ~/workspace/projects/
+git clone <repo_url> recursivemas
+cd recursivemas
+git submodule update --init --recursive
 ```
 
 ## Шаг 2 — Создание виртуального окружения
@@ -91,7 +93,7 @@ python inference/run.py \
   --num_samples 5
 ```
 
-Если вывел результаты — всё работает! ✅
+Если вывел результаты — всё работает!
 
 ## Шаг 8 — Опционально: HuggingFace авторизация
 
@@ -102,6 +104,17 @@ pip install huggingface_hub
 huggingface-cli login
 # Вставь токен с https://huggingface.co/settings/tokens
 ```
+
+---
+
+## Хранение данных
+
+| Тип данных | Путь |
+| --- | --- |
+| Модели | `~/workspace/models/models_llm/` |
+| Чекпоинты обучения | `~/workspace/tmp/recursivemas/checkpoints/` |
+| Результаты оценки | `~/workspace/data/recursivemas/results/` |
+| Логи | `~/workspace/tmp/recursivemas/` |
 
 ---
 
@@ -116,7 +129,7 @@ huggingface-cli login
 ### Ошибка: CUDA out of memory
 - Используй Sequential Light (~4.2B) вместо Scaled (~11B)
 - Уменьши batch size
-- Используй `--device cuda:1` для RTX 4060 Ti
+- Используй `--device cuda:2` для RTX 4060 Ti
 
 ### Ошибка: модель не загружается
 - Проверь интернет-соединение

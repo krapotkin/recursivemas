@@ -19,7 +19,7 @@ train_outer.py — Outer-Loop Training (воспроизведение ориг�
     python train_outer.py \
         --agent1_model Qwen/Qwen3-1.7B \
         --agent2_model Qwen/Qwen3-1.7B \
-        --agent3_model ./models/Qwen2.5-Math-1.5B-Instruct \
+        --agent3_model ~/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct \
         --agent1_inner ckpts/planner_math/ \
         --agent2_inner ckpts/refiner_math/ \
         --agent3_inner ckpts/solver_math/ \
@@ -37,6 +37,7 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -196,6 +197,26 @@ class CrossModelAdapter(nn.Module):
         self.ln_source = nn.LayerNorm(in_dim) if self.use_ln else None
         self.ln_target = nn.LayerNorm(out_dim) if self.use_ln else None
         self.residual_proj = nn.Linear(in_dim, out_dim) if self.use_residual else None
+
+    def init_aligned(self, bridge: torch.Tensor) -> None:
+        """Инициализация весов из предвычисленной bridge-матрицы.
+
+        bridge: (out_dim, in_dim) — ridge regression решение.
+        residual_proj.weight инициализируется bridge-матрицей.
+        proj1, proj2 инициализируются near-zero для плавного старта.
+        """
+        if self.residual_proj is not None:
+            with torch.no_grad():
+                self.residual_proj.weight.copy_(bridge.to(self.residual_proj.weight.dtype))
+                if self.residual_proj.bias is not None:
+                    self.residual_proj.bias.zero_()
+        # MLP path — near-zero init (гладкий старт)
+        for name, param in self.named_parameters():
+            if name.startswith("proj"):
+                if param.dim() >= 2:
+                    nn.init.normal_(param, mean=0.0, std=0.005)
+                else:
+                    nn.init.zeros_(param)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         h = self.ln_source(x) if self.ln_source is not None else x
@@ -732,12 +753,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dtype", type=str, default="bfloat16", choices=["float32", "float16", "bfloat16"])
     parser.add_argument("--outer_dtype", type=str, default="bfloat16", choices=["float32", "float16", "bfloat16"])
     parser.add_argument("--trust_remote_code", action="store_true", default=True)
-    parser.add_argument("--device", type=str, default="cuda:2")
+    parser.add_argument("--device", type=str, default="cuda:1")
 
     parser.add_argument("--save_dir", type=str, required=True)
     parser.add_argument("--save_steps", type=int, default=0)
     parser.add_argument("--load_dir", type=str, default=None, help="Resume from checkpoint dir")
     parser.add_argument("--grad_accum_steps", type=int, default=1, help="Gradient accumulation steps")
+
+    parser.add_argument("--align_outer", type=int, default=1, choices=[0, 1],
+                        help="1 = enable aligned bridge init before training")
+    parser.add_argument("--align_samples", type=int, default=300,
+                        help="Number of samples for bridge alignment")
 
     return parser.parse_args()
 
@@ -753,6 +779,53 @@ def resolve_dtype(dtype_str: str) -> Optional[torch.dtype]:
     if dtype_str == "bfloat16":
         return torch.bfloat16
     return None
+
+
+def collect_hidden_pairs(
+    model: nn.Module,
+    tokenizer,
+    texts: List[str],
+    device: torch.device,
+    dtype: torch.dtype,
+    max_length: int = 4096,
+) -> torch.Tensor:
+    """Собирает скрытые состояния из последнего слоя модели для списка текстов.
+
+    Returns: (batch, hidden_size) — усреднённые по токенам.
+    """
+    model.eval()
+    all_hiddens = []
+    with torch.no_grad():
+        for text in texts:
+            inputs = tokenizer(
+                text, return_tensors="pt", truncation=True,
+                max_length=max_length, padding=True,
+            ).to(device)
+            outputs = model(**inputs, output_hidden_states=True)
+            # Берем последний hidden state последнего слоя
+            hs = outputs.hidden_states[-1]  # (1, seq_len, hidden)
+            # Усредняем по токенам (исключая padding)
+            mask = inputs["attention_mask"].unsqueeze(-1).to(hs.dtype)
+            pooled = (hs * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+            all_hiddens.append(pooled.cpu())
+    return torch.cat(all_hiddens, dim=0)
+
+
+def compute_procrustes_bridge(H_src: torch.Tensor, H_tgt: torch.Tensor, lam: float = 0.1) -> torch.Tensor:
+    """Ridge regression: W = (A^T A + λI)^{-1} A^T B.
+
+    A = H_src — source hidden states (n, in_dim)
+    B = H_tgt — target hidden states (n, out_dim)
+
+    Returns: W — bridge матрица (out_dim, in_dim)
+    """
+    A = H_src.float().numpy()
+    B = H_tgt.float().numpy()
+    AtA = A.T @ A
+    AtB = A.T @ B
+    I = np.eye(AtA.shape[0])
+    W = np.linalg.solve(AtA + lam * I, AtB).T
+    return torch.from_numpy(W).to(dtype=H_src.dtype)
 
 
 def main():
@@ -844,10 +917,8 @@ def main():
     print(f"  Outer 31 (Solver→Planner):  {solver_hidden} → {planner_hidden}")
     print(f"  Trainable params: {trainable:,}")
 
-    optimizer = torch.optim.AdamW(params, lr=args.outer_lr, weight_decay=args.weight_decay, betas=(0.9, 0.95))
-
-    # ── Load dataset ─────────────────────────────────────────
-    print(f"\n📚 Loading {args.dataset_name}...")
+    # ── Dataset (must be loaded before alignment) ──────────────
+    print(f"\nLoading {args.dataset_name}...")
     dataset = load_outer_training_dataset(args.dataset_name, args.dataset_split, args.dataset_json_field)
     needed_cols = {"question", "plan", "refined_plan", "answer"}
     missing = needed_cols.difference(set(dataset.column_names))
@@ -857,7 +928,7 @@ def main():
         dataset = dataset.shuffle(seed=args.seed)
     if args.num_samples > 0:
         dataset = dataset.select(range(min(args.num_samples, len(dataset))))
-    print(f"📊 Dataset size: {len(dataset)}")
+    print(f"Dataset size: {len(dataset)}")
 
     rows = [
         {
@@ -874,6 +945,60 @@ def main():
     dataloader = DataLoader(rows, batch_size=args.batch_size, shuffle=True, drop_last=True, collate_fn=lambda x: x)
     if len(dataloader) == 0:
         raise ValueError("Dataloader is empty. Increase dataset size or reduce batch_size.")
+
+    # ── Aligned Bridge Initialization ─────────────────────────
+    if args.align_outer:
+        align_samples = min(args.align_samples, len(rows))
+        print(f"\n🔧 Aligned Bridge Initialization ({align_samples} samples)...")
+        align_rows = rows[:align_samples]
+        align_texts = [r["question"] for r in align_rows]
+
+        # Collect hidden states on a subset
+        print("  Collecting planner hidden states...")
+        H_planner = collect_hidden_pairs(
+            planner_model, planner_tok, align_texts,
+            device=device, dtype=model_dtype, max_length=args.max_length,
+        )
+        print("  Collecting refiner hidden states (fast path on GPU)...")
+        # Временно перекидываем Refiner на GPU для быстрого сбора
+        refiner_model.to(device)
+        H_refiner = collect_hidden_pairs(
+            refiner_model, refiner_tok, align_texts,
+            device=device, dtype=model_dtype, max_length=args.max_length,
+        )
+        # Возвращаем Refiner на CPU, освобождая VRAM
+        refiner_model.to("cpu")
+        torch.cuda.empty_cache()
+        print("  Collecting solver hidden states...")
+        H_solver = collect_hidden_pairs(
+            solver_model, solver_tok, align_texts,
+            device=device, dtype=model_dtype, max_length=args.max_length,
+        )
+
+        # Compute bridges via ridge regression
+        print("  Computing Procrustes bridges...")
+        lam = 0.1  # ridge regularization
+        bridge_12 = compute_procrustes_bridge(H_planner, H_refiner, lam=lam)
+        bridge_23 = compute_procrustes_bridge(H_refiner, H_solver, lam=lam)
+        bridge_31 = compute_procrustes_bridge(H_solver, H_planner, lam=lam)
+
+        # Apply aligned init
+        print("  Applying aligned initialization...")
+        outer_12.init_aligned(bridge_12)
+        outer_23.init_aligned(bridge_23)
+        outer_31.init_aligned(bridge_31)
+
+        # Save bridges for reuse
+        if args.save_dir:
+            bridge_dir = os.path.join(args.save_dir, "bridges")
+            os.makedirs(bridge_dir, exist_ok=True)
+            torch.save(bridge_12, os.path.join(bridge_dir, "bridge_12.pt"))
+            torch.save(bridge_23, os.path.join(bridge_dir, "bridge_23.pt"))
+            torch.save(bridge_31, os.path.join(bridge_dir, "bridge_31.pt"))
+            print(f"  Bridges saved to {bridge_dir}")
+        print("  ✅ Aligned init complete.")
+
+    optimizer = torch.optim.AdamW(params, lr=args.outer_lr, weight_decay=args.weight_decay, betas=(0.9, 0.95))
 
     # ── Scheduler ────────────────────────────────────────────
     steps_per_epoch = len(dataloader)
@@ -1007,27 +1132,34 @@ def main():
                         planner_to_refiner = trim_latent(planner_to_refiner, args.max_latent_tokens)
 
                         # ── Stage 2: Refiner ──────────────────
-                        refiner_user_with_slot = build_math_refiner_prompt_with_slot(q)
-                        refiner_pack = build_stage_with_slot(
-                            tokenizer=refiner_tok,
-                            embedding_layer=refiner_embed,
-                            user_prompt_with_slot=refiner_user_with_slot,
-                            assistant_text=rp,
-                            slot_text=PLANNER_SLOT,
-                            slot_embeds=planner_to_refiner,
-                            enable_thinking=enable_thinking,
-                            device=device,
-                            embed_dtype=refiner_embed.weight.dtype,
-                            max_length=args.max_length,
-                        )
-                        refiner_out = refiner_model(
-                            inputs_embeds=refiner_pack.inputs_embeds,
-                            attention_mask=refiner_pack.attention_mask,
-                            output_hidden_states=True,
-                            use_cache=False,
-                            return_dict=True,
-                        )
-                        refiner_hidden = refiner_out.hidden_states[-1][0][refiner_pack.assistant_mask]
+                        with torch.no_grad():
+                            # Refiner на CPU — перекидываем на GPU для forward
+                            if next(refiner_model.parameters()).device != device:
+                                refiner_model.to(device)
+                            refiner_user_with_slot = build_math_refiner_prompt_with_slot(q)
+                            refiner_pack = build_stage_with_slot(
+                                tokenizer=refiner_tok,
+                                embedding_layer=refiner_embed,
+                                user_prompt_with_slot=refiner_user_with_slot,
+                                assistant_text=rp,
+                                slot_text=PLANNER_SLOT,
+                                slot_embeds=planner_to_refiner,
+                                enable_thinking=enable_thinking,
+                                device=device,
+                                embed_dtype=refiner_embed.weight.dtype,
+                                max_length=args.max_length,
+                            )
+                            refiner_out = refiner_model(
+                                inputs_embeds=refiner_pack.inputs_embeds,
+                                attention_mask=refiner_pack.attention_mask,
+                                output_hidden_states=True,
+                                use_cache=False,
+                                return_dict=True,
+                            )
+                            refiner_hidden = refiner_out.hidden_states[-1][0][refiner_pack.assistant_mask]
+                            # Возвращаем Refiner на CPU, освобождая VRAM для Solver
+                            refiner_model.to("cpu")
+                            torch.cuda.empty_cache()
                         if refiner_hidden.size(0) == 0:
                             round_losses = []
                             break

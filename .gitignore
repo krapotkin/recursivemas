@@ -47,3 +47,13 @@ tmp/
 
 # Cron output
 ~/.hermes/cron/
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Editor backup files
+*~
+.*.swp
+.*.swo

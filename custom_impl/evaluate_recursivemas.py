@@ -27,7 +27,6 @@ import sys
 import time
 import argparse
 import json
-import re
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -45,13 +44,17 @@ try:
 except Exception:
     pass
 
+# Унифицированные утилиты из dataset_utils
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from dataset_utils import parse_answer, normalize_answer, compute_accuracy, print_results, load_dataset_safe
+
 # ============================================================
 # Модели и конфиг
 # ============================================================
 PLANNER_MODEL = "Qwen/Qwen3-1.7B"
 REFINER_MODEL = "Qwen/Qwen3-1.7B"  # та же модель, что и Planner
-SOLVER_MODEL = "/home/hermes/workspace/projects/recursivemas/models/Qwen2.5-Math-1.5B-Instruct"
-DEFAULT_DEVICE = "cuda:2"
+SOLVER_MODEL = os.path.expanduser("~/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct")
+DEFAULT_DEVICE = "cuda:1"
 
 SYSTEM_PROMPT = "You are a helpful assistant."
 
@@ -335,61 +338,6 @@ def load_gsm8k_test(num_examples: int = 100):
     return ds
 
 
-def parse_answer(text: str) -> str:
-    """Парсит ответ из текста (#### X или \\boxed{X})."""
-    if not text:
-        return ""
-    # Try #### format
-    match = re.search(r'####\s*(.+?)(?:\n|$)', text)
-    if match:
-        return match.group(1).strip()
-    # Try \boxed{} format
-    match = re.search(r'\\boxed\{(.+?)\}', text)
-    if match:
-        return match.group(1).strip()
-    return text.strip()
-
-
-def normalize_answer(answer: str) -> str:
-    """Нормализует числовой ответ."""
-    # Remove commas, dollars, percent signs
-    answer = re.sub(r'[,$%]', '', answer)
-    # Extract number
-    match = re.search(r'(-?\d+\.?\d*)', answer)
-    if match:
-        return match.group(1)
-    return answer
-
-
-def compute_accuracy(predictions, answers):
-    """Вычисляет accuracy."""
-    correct = 0
-    examples = []
-    for i, (pred, ans) in enumerate(zip(predictions, answers)):
-        pred_parsed = parse_answer(pred) if pred else ""
-        pred_norm = normalize_answer(pred_parsed)
-        # Parse GT answer the same way (#### X or \boxed{X})
-        ans_parsed = parse_answer(ans) if ans else ""
-        ans_norm = normalize_answer(ans_parsed)
-        is_correct = pred_norm == ans_norm
-        if is_correct:
-            correct += 1
-        examples.append({
-            "index": i,
-            "prediction": pred,
-            "prediction_parsed": pred_parsed,
-            "answer_parsed": ans_norm,
-            "correct": is_correct,
-        })
-    accuracy = correct / len(predictions) * 100 if predictions else 0
-    return {
-        "accuracy": accuracy,
-        "correct": correct,
-        "total": len(predictions),
-        "examples": examples,
-    }
-
-
 # ============================================================
 # Main evaluation pipeline
 # ============================================================
@@ -403,11 +351,19 @@ class RecursiveMASEvaluator:
       3. Solver ← slot injection ← outer_23 → текст
     """
 
+    @staticmethod
+    def _device_str(d):
+        """Convert torch.device to string for device_map, handling cuda:None."""
+        if d.type == "cuda" and d.index is None:
+            return "cuda:0"
+        return str(d)
+
     def __init__(self, args, device):
         self.device = device
         self.num_latent_tokens = args.num_latent_tokens
         self.num_recursive_rounds = args.num_recursive_rounds  # FIX: was missing, original uses 3
         self.model_dtype = torch.bfloat16
+        dev_str = RecursiveMASEvaluator._device_str(device)
 
         # Load models
         print("Loading Planner...")
@@ -417,7 +373,7 @@ class RecursiveMASEvaluator:
             self.planner_tok.pad_token = self.planner_tok.eos_token
         self.planner_model = AutoModelForCausalLM.from_pretrained(
             PLANNER_MODEL, torch_dtype=self.model_dtype,
-            device_map={"": device.index}, trust_remote_code=True)
+            device_map={"": dev_str}, trust_remote_code=True)
         self.planner_model.eval()
         for p in self.planner_model.parameters():
             p.requires_grad = False
@@ -441,7 +397,7 @@ class RecursiveMASEvaluator:
                 self.refiner_tok.pad_token = self.refiner_tok.eos_token
             self.refiner_model = AutoModelForCausalLM.from_pretrained(
                 REFINER_MODEL, torch_dtype=self.model_dtype,
-                device_map={"": device.index}, trust_remote_code=True)
+                device_map={"": dev_str}, trust_remote_code=True)
             self.refiner_model.eval()
             for p in self.refiner_model.parameters():
                 p.requires_grad = False
@@ -456,7 +412,7 @@ class RecursiveMASEvaluator:
             self.solver_tok.pad_token = self.solver_tok.eos_token
         self.solver_model = AutoModelForCausalLM.from_pretrained(
             SOLVER_MODEL, torch_dtype=self.model_dtype,
-            device_map={"": device.index}, trust_remote_code=True)
+            device_map={"": dev_str}, trust_remote_code=True)
         self.solver_model.eval()
         for p in self.solver_model.parameters():
             p.requires_grad = False
@@ -505,7 +461,7 @@ class RecursiveMASEvaluator:
             adapter.load_state_dict(torch.load(adapter_path, map_location="cpu", weights_only=True))
             print(f"  {name} inner: loaded from {path}")
         else:
-            print(f"  ⚠️ {name} inner: no adapter at {path}")
+            print(f"  WARNING: {name} inner: no adapter at {path}")
 
     def _load_outer(self, save_dir):
         """Загружает outer adapters из train_outer.py checkpoint."""
@@ -693,8 +649,10 @@ class RecursiveMASEvaluator:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="RecursiveMAS evaluation on GSM8K (совместим с train_outer.py)",
+        description="RecursiveMAS evaluation on GSM8K / Math500 (совместим с train_outer.py)",
     )
+    parser.add_argument("--dataset", type=str, default="gsm8k", choices=["gsm8k", "math500"],
+                        help="Датасет для оценки (default: gsm8k)")
     parser.add_argument("--num_examples", type=int, default=100,
                         help="Количество примеров (default: 100)")
     parser.add_argument("--device", type=str, default=DEFAULT_DEVICE,
@@ -720,10 +678,10 @@ def main():
     print("=" * 70)
     print("RECURSIVEMAS EVALUATION (совместим с train_outer.py)")
     print("=" * 70)
+    print(f"Dataset: {args.dataset}")
     print(f"Device: {device}")
     print(f"Latent tokens per agent: {args.num_latent_tokens}")
     print(f"Recursive rounds: {args.num_recursive_rounds}")
-    print(f"Generation: do_sample=True, temperature=0.6, top_p=0.95, max_new_tokens=1000")
     print(f"Outer checkpoint: {args.outer_checkpoint or 'random'}")
     print(f"Inner checkpoints: {args.inner1_checkpoint or 'random'}, {args.inner2_checkpoint or 'random'}, {args.inner3_checkpoint or 'random'}")
     print()
@@ -731,12 +689,12 @@ def main():
     # Create evaluator
     evaluator = RecursiveMASEvaluator(args, device)
 
-    # Load GSM8K
-    print("\nLoading GSM8K test...")
-    ds = load_gsm8k_test(args.num_examples)
-    questions = ds["question"]
-    answers = ds["answer"]
-    print(f"  Загружено {len(questions)} примеров")
+    # Load dataset
+    print(f"\nLoading {args.dataset}...")
+    data = load_dataset_safe(args.dataset, num_examples=args.num_examples)
+    questions = data["questions"]
+    gt_numbers = data["gt_numbers"]
+    print(f"  Loaded {len(questions)} examples")
 
     # Run evaluation
     print(f"\n{'='*70}")
@@ -749,12 +707,13 @@ def main():
     stage_timings = {"planner": [], "outer_12": [], "refiner": [], "outer_23": [], "solver": []}
 
     for i, question in enumerate(questions):
-        if (i + 1) % 10 == 0 or i == 0:
-            print(f"  Обработка {i+1}/{len(questions)}...")
-
         t_start = time.time()
         result = evaluator.evaluate_example(question)
         elapsed = time.time() - t_start
+
+        if (i + 1) % 10 == 0 or i == 0:
+            ts = time.strftime("%H:%M:%S")
+            print(f"  [{ts}] Обработка {i+1}/{len(questions)} | {elapsed:.1f}s/образец | {(i+1)*elapsed:.0f}s total")
 
         predictions.append(result["answer"])
         timings.append(elapsed)
@@ -766,23 +725,10 @@ def main():
     print(f"  Обработка {len(questions)}/{len(questions)}... DONE\n")
 
     # Compute accuracy
-    results = compute_accuracy(predictions, answers)
+    results = compute_accuracy(predictions, gt_numbers, questions=questions)
 
     # Print results
-    print("=" * 70)
-    print(f"  Accuracy: {results['accuracy']:.1f}% ({results['correct']}/{results['total']})")
-    avg_time = sum(timings) / len(timings) if timings else 0
-    print(f"  Среднее время на пример: {avg_time:.2f}s")
-    print(f"  Общее время: {sum(timings):.1f}s")
-    print("=" * 70)
-
-    # Examples
-    print(f"\nПримеры (первые 5):")
-    for ex in results["examples"][:5]:
-        status = "OK" if ex["correct"] else "FAIL"
-        pred_short = (ex["prediction"][:60] + "...") if ex["prediction"] and len(ex["prediction"]) > 60 else (ex["prediction"] or "None")
-        print(f"  {status} [{ex['index']}] Pred: {ex['prediction_parsed'] or 'None'}, Ans: {ex['answer_parsed']}")
-        print(f"     Q: {questions[ex['index']][:80]}...")
+    print_results(results, title="RecursiveMAS Evaluation", timings=timings)
 
     # Stage timings
     print(f"\nСреднее время по стадиям:")
@@ -809,7 +755,7 @@ def main():
             ],
             "timings": {
                 "per_example": timings,
-                "avg": avg_time,
+                "avg": sum(timings) / len(timings) if timings else 0,
                 "total": sum(timings),
             },
             "meta": {

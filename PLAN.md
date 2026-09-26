@@ -1,8 +1,8 @@
 # PLAN.md — План работ по проекту RecursiveMAS
 
-## Текущий статус (2025-07-09)
+## Текущий статус (2025-07-13, ветка clean)
 
-### Завершено
+### Выполнено
 
 - Изучение оригинальной статьи и репозитория
 - Клонирование оригинального репозитория в `experiments/original/`
@@ -10,74 +10,72 @@
 - Реализация Outer-Loop Training (`train_outer.py`) — полностью переписана, совместима с оригиналом
 - Обучение Inner-Loop (3 роли, 20000 steps каждая)
 - Обучение Outer-Loop (20000 steps)
-- Оценка на GSM8K test: **81.8% accuracy (1079/1319)**
-- Документация архивных файлов (`pregenerate_teacher_data.py`)
+- Оценка на GSM8K test: **81.8% accuracy (1079/1319)** — предыдущий результат
 
-### Что изменилось
+### Выполнена очистка проекта (ветка clean)
 
-**До:** Использовали `openai/gsm8k` для обучения + `pregenerate_teacher_data.py` для генерации планов.
-**После:** Используем `RecursiveMAS/Sequential-Math` (как в оригинале) — датасет уже содержит teacher-generated планы.
+- Удалены устаревшие файлы (10 файлов)
+- Чекпоинты перемещены в `~/workspace/tmp/recursivemas/old_checkpoints/`
+- Удалены пустые папки `models/`, `notebooks/`
+- Исправлены пути к моделям (теперь `~/workspace/models/models_llm/`)
+- Убраны эмодзи из кода
+- Исправлены импорты и мелкие проблемы (float16 -> bfloat16, dataset name)
+- Создан `.gitattributes`, обновлён `.gitignore`
+- Написаны unit-тесты (40 тестов)
+- Исправлено соответствие оригиналу (MSE weight: 0.0 -> 0.1, loss mask)
+- Обновлена документация (README.md, AGENTS.md)
 
-### Архитектура (совместима с оригиналом)
+---
 
-| Компонент | Статус |
-| --- | --- |
-| Inner adapter (`ln_res_adapter`) | Совместим |
-| Outer adapter (`outer_ln_res_adapter`) | Совместим |
-| Dataset (`RecursiveMAS/Sequential-Math`) | Совместим |
-| Inner loss (cosine + MSE) | Совместим |
-| Outer loss (CE, supervise_final_only) | Совместим |
-| Prompts (из `mas_prompt.py`) | Совместим |
-| Recursive rounds (3) | Совместим |
-| max_length (4096) | Совместим |
-| Optimizer (AdamW) | Совместим |
-| Scheduler (cosine + warmup) | Совместим |
+## Результаты повторных замеров
 
-### Отличия от оригинала
+### 5.1 evaluate_single_model.py — Baseline
 
-- **Refiner модель:** `Qwen/Qwen3-1.7B` вместо `meta-llama/Llama-3.2-1B-Instruct` (gated repo)
-- **Без accelerate:** используем прямой PyTorch (single GPU)
-- **Претокенизация:** весь датасет токенизируется upfront в inner loop
+| Модель | Точность | Время/пример |
+|--------|----------|--------------|
+| Qwen2.5-Math-1.5B-Instruct | **83.2%** (1098/1319) | 7.51s |
+| Qwen3-1.7B | **22.3%** (294/1319) | 15.75s |
+
+### 5.2 evaluate_text_mas.py — Текстовый MAS
+
+| Метод | Точность | Время/пример |
+|-------|----------|--------------|
+| Text MAS (Planner -> Refiner -> Solver) | **85.4%** (1127/1319) | 23.25s |
+
+### 6. Повторное обучение
+
+| Этап | Роль | Время |
+|------|------|-------|
+| Inner-Loop | Planner (Qwen3-1.7B) | 1916s |
+| Inner-Loop | Refiner (Qwen3-1.7B) | 2964s |
+| Inner-Loop | Solver (Qwen2.5-Math-1.5B) | 5001s |
+| Outer-Loop | Все 3 агента | 74450s |
+
+### 7. evaluate_recursivemas.py — RecursiveMAS
+
+| Метод | Точность | Время/пример |
+|-------|----------|--------------|
+| RecursiveMAS (latency) | **74.9%** (988/1319) | 32.47s |
 
 ---
 
 ## Дальнейшие шаги
 
-### Приоритет 1: Переобучение с оригинальными датасетами
+### Приоритет 1: Улучшение результатов
 
-Inner и Outer loop уже используют `RecursiveMAS/Sequential-Math`, но чекпоинты обучены на старых данных. Нужно:
+- Увеличить количество шагов outer training (40000+)
+- Настройка гиперпараметров (learning rate, batch size)
+- Ablation study для понимания вкладов
 
-1. Переобучить Inner-Loop (3 роли) на `RecursiveMAS/Sequential-Math`
-2. Переобучить Outer-Loop на `RecursiveMAS/Sequential-Math`
-3. Оценить на GSM8K test
-
-Ожидаемый результат: улучшение accuracy за счёт более качественных teacher-generated планов.
-
-### Приоритет 2: Baseline сравнения
-
-- `evaluate_single_model.py` — Qwen2.5-Math-1.5B без адаптеров (полный GSM8K test)
-- `evaluate_text_mas.py` — текстовый MAS (полный GSM8K test)
-- Сравнить с RecursiveMAS (81.8%)
-
-### Приоритет 3: Ablation study
+### Приоритет 2: Ablation study
 
 - Без Outer Link 1 (Planner -> Refiner)
 - Без Outer Link 2 (Refiner -> Solver)
 - Разная глубина рекурсии (r=1 vs r=3)
 
-### Приоритет 4: Оценка на других бенчмарках (из оригинала)
+### Приоритет 3: Оценка на других бенчмарках
 
 - MATH-500 (`math500`)
 - GPQA (`gpqa`)
 - MedQA (`medqa`)
 - AIME 2025/2026 (`aime25`, `aime26`)
-
----
-
-## Архивные файлы
-
-| Файл | Статус | Описание |
-| --- | --- | --- |
-| `inner_link_training.py` | УСТАРЕЛ | Заменён на `train_inner.py` |
-| `outer_link_training_v2.py` | УСТАРЕЛ | Заменён на `train_outer.py` |
-| `pregenerate_teacher_data.py` | УСТАРЕЛ | Генерация планов через GSM8K. Не используется, так как оригинал использует `RecursiveMAS/Sequential-Math` с teacher-generated планами. См. `pregenerate_teacher_data_ARCHIVE.md`. |

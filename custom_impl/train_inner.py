@@ -26,7 +26,7 @@ train_inner.py — Inner-Loop Training (воспроизведение ориг�
     python train_inner.py --mas_role refiner --model_name_or_path meta-llama/Llama-3.2-1B-Instruct
 
     # Solver
-    python train_inner.py --mas_role solver --model_name_or_path ./models/Qwen2.5-Math-1.5B-Instruct
+    python train_inner.py --mas_role solver --model_name_or_path ~/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct
 
     # С GSM8K (для отладки)
     python train_inner.py --mas_role solver --dataset_name openai/gsm8k --model_name_or_path ...
@@ -39,6 +39,7 @@ import argparse
 import json
 import math
 import os
+import re
 import time
 from typing import Optional
 
@@ -159,7 +160,6 @@ def build_math_solver_prompt(question: str, refined_plan: str, solver_pre_questi
 # ============================================================
 # GSM8K helpers (как в оригинале data.py)
 # ============================================================
-import re
 
 def _build_gsm8k_user_prompt(question: str) -> str:
     return (
@@ -414,8 +414,9 @@ def parse_args() -> argparse.Namespace:
                         help="Adapter dtype (auto = same as model)")
     parser.add_argument("--trust_remote_code", action="store_true", default=True)
     parser.add_argument("--adapter_cos_weight", type=float, default=1.0)
-    parser.add_argument("--adapter_mse_weight", type=float, default=0.0)
-    parser.add_argument("--device", type=str, default="cuda:2")
+    parser.add_argument("--adapter_mse_weight", type=float, default=0.1,
+                        help="Weight for MSE loss (default: 0.1, as in original)")
+    parser.add_argument("--device", type=str, default="cuda")
     # Original flags for compatibility
     parser.add_argument("--enable_thinking", type=int, default=0, choices=[0, 1],
                         help="Enable thinking mode for tokenizer (DeepSeek-style)")
@@ -495,12 +496,13 @@ def main():
     
     # 2. Загрузка модели
     print("📦 Loading model...")
+    device_str = f"cuda:{device.index}" if device.index is not None else "cuda:0"
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_name_or_path,
-        torch_dtype=torch_dtype,
-        device_map={"": device.index},
-        trust_remote_code=args.trust_remote_code,
-    )
+            args.model_name_or_path,
+            torch_dtype=torch_dtype,
+            device_map={"": device_str} if device.type == "cuda" else None,
+            trust_remote_code=args.trust_remote_code,
+        )
     model.eval()
     for p in model.parameters():
         p.requires_grad = False
@@ -532,14 +534,14 @@ def main():
         adapter_path = os.path.join(args.load_dir, "adapter.pt")
         if os.path.isfile(adapter_path):
             adapter.load_state_dict(torch.load(adapter_path, map_location="cpu", weights_only=True))
-            print(f"  ✅ Loaded adapter from {args.load_dir}")
+            print(f"  Loaded adapter from {args.load_dir}")
     
     total_params = sum(p.numel() for p in adapter.parameters())
     model_params = sum(p.numel() for p in model.parameters())
-    print(f"📊 Adapter params: {total_params:,} ({total_params/model_params*100:.2f}%)")
+    print(f"Adapter params: {total_params:,} ({total_params/model_params*100:.2f}%)")
     
     # 4. Загрузка датасета
-    print(f"📚 Loading {args.dataset_name}...")
+    print(f"Loading {args.dataset_name}...")
     is_gsm8k = args.dataset_name.strip().lower() in {"gsm8k", "openai/gsm8k"}
     
     if is_gsm8k:
@@ -549,10 +551,10 @@ def main():
     else:
         dataset = load_dataset_split(args.dataset_name, args.dataset_split, args.dataset_json_field)
     
-    print(f"📊 Dataset size: {len(dataset)}")
+    print(f"Dataset size: {len(dataset)}")
     
     # 5. Токенизация датасета
-    print("🔤 Tokenizing dataset...")
+    print("Tokenizing dataset...")
     tokenized_samples = []
     for i, sample in enumerate(dataset):
         question = sample["question"]
@@ -607,7 +609,7 @@ def main():
         if (i + 1) % 500 == 0:
             print(f"  Tokenized {i+1}/{len(dataset)}...")
     
-    print(f"📊 Tokenized samples: {len(tokenized_samples)}")
+    print(f"Tokenized samples: {len(tokenized_samples)}")
     
     # 6. DataLoader
     dataloader = DataLoader(
@@ -667,7 +669,8 @@ def main():
             # Pairwise alignment: hidden[:, :-1] → target: input_embeds[:, 1:]
             hidden_prev = hidden_states[:, :-1, :]
             target_embeds = input_embeds[:, 1:, :]
-            loss_mask_shifted = loss_mask[:, 1:]
+            # Loss mask: как в оригинале — realign_pair_mask
+            loss_mask_shifted = loss_mask[:, 1:] * attention_mask[:, :-1]
             
             # Применяем adapter
             preds = adapter(hidden_prev)
@@ -710,8 +713,9 @@ def main():
                 denom = max(log_stats[3].item(), 1.0)
                 avg = log_stats[:3] / denom
                 elapsed = time.time() - start_time
+                current_lr = optimizer.param_groups[0]["lr"]
                 print(f"step={global_step} loss={avg[0]:.4f} cos={avg[1]:.4f} "
-                      f"mse={avg[2]:.4f} time={elapsed:.0f}s", flush=True)
+                      f"mse={avg[2]:.4f} lr={current_lr:.6f} time={elapsed:.0f}s", flush=True)
                 log_stats.zero_()
             
             if args.save_steps > 0 and global_step % args.save_steps == 0:
