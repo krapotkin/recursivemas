@@ -176,12 +176,12 @@ def save_results(results, filepath, timings=None, meta=None):
 # Модели
 # ============================================================
 
-def load_model(model_path, device="cuda:2"):
+def load_model(model_path, device="cuda:1"):
     """Загрузка модели и токенизатора.
 
     Args:
         model_path: путь или HF имя модели
-        device: строка устройства ('cuda:2', 'cpu', ...)
+        device: строка устройства ('cuda:1', 'cpu', ...)
 
     Returns:
         (model, tokenizer)

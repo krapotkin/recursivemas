@@ -1,3 +1,6 @@
 [submodule "experiments/original"]
 	path = experiments/original
-	url = https://github.com/RecursiveMAS/RecursiveMAS.git
+	url = https://github.com/utrobinmv/RecursiveMAS.git
+[submodule "experiments/latent-mas"]
+	path = experiments/latent-mas
+	url = https://github.com/utrobinmv/LatentMAS.git

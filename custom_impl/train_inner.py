@@ -26,7 +26,7 @@ train_inner.py — Inner-Loop Training (воспроизведение ориг�
     python train_inner.py --mas_role refiner --model_name_or_path meta-llama/Llama-3.2-1B-Instruct
 
     # Solver
-    python train_inner.py --mas_role solver --model_name_or_path /home/hermes/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct
+    python train_inner.py --mas_role solver --model_name_or_path ~/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct
 
     # С GSM8K (для отладки)
     python train_inner.py --mas_role solver --dataset_name openai/gsm8k --model_name_or_path ...
@@ -416,7 +416,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--adapter_cos_weight", type=float, default=1.0)
     parser.add_argument("--adapter_mse_weight", type=float, default=0.1,
                         help="Weight for MSE loss (default: 0.1, as in original)")
-    parser.add_argument("--device", type=str, default="cuda:2")
+    parser.add_argument("--device", type=str, default="cuda")
     # Original flags for compatibility
     parser.add_argument("--enable_thinking", type=int, default=0, choices=[0, 1],
                         help="Enable thinking mode for tokenizer (DeepSeek-style)")
@@ -496,12 +496,13 @@ def main():
     
     # 2. Загрузка модели
     print("📦 Loading model...")
+    device_str = f"cuda:{device.index}" if device.index is not None else "cuda:0"
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_name_or_path,
-        torch_dtype=torch_dtype,
-        device_map={"": device.index},
-        trust_remote_code=args.trust_remote_code,
-    )
+            args.model_name_or_path,
+            torch_dtype=torch_dtype,
+            device_map={"": device_str} if device.type == "cuda" else None,
+            trust_remote_code=args.trust_remote_code,
+        )
     model.eval()
     for p in model.parameters():
         p.requires_grad = False
@@ -712,8 +713,9 @@ def main():
                 denom = max(log_stats[3].item(), 1.0)
                 avg = log_stats[:3] / denom
                 elapsed = time.time() - start_time
+                current_lr = optimizer.param_groups[0]["lr"]
                 print(f"step={global_step} loss={avg[0]:.4f} cos={avg[1]:.4f} "
-                      f"mse={avg[2]:.4f} time={elapsed:.0f}s", flush=True)
+                      f"mse={avg[2]:.4f} lr={current_lr:.6f} time={elapsed:.0f}s", flush=True)
                 log_stats.zero_()
             
             if args.save_steps > 0 and global_step % args.save_steps == 0:

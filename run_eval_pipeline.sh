@@ -4,11 +4,11 @@
 
 set -euo pipefail
 
-cd /home/hermes/workspace/projects/recursivemas
+cd "$(dirname "$0")"
 source .venv
 
-RESULTS_DIR="/home/joefox/workspace/data/recursivemas/results"
-LOGS_DIR="/home/joefox/workspace/tmp/recursivemas"
+RESULTS_DIR="$HOME/workspace/data/recursivemas/results"
+LOGS_DIR="$HOME/workspace/tmp/recursivemas"
 
 echo "=== RecursiveMAS Evaluation Pipeline ==="
 echo "Started: $(date)"
@@ -17,7 +17,7 @@ echo ""
 # Step 1: Qwen2.5-Math-1.5B-Instruct baseline
 echo "=== Step 1: Qwen2.5-Math-1.5B-Instruct baseline ==="
 python3 -u custom_impl/evaluate_single_model.py \
-    --model /home/hermes/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct \
+    --model "$HOME/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct" \
     --num_examples 1319 \
     --device cuda:2 \
     --output "${RESULTS_DIR}/eval_single_qwen25_math_15b_full.json" \
@@ -30,7 +30,7 @@ echo ""
 # Step 2: Qwen3-1.7B baseline
 echo "=== Step 2: Qwen3-1.7B baseline ==="
 python3 -u custom_impl/evaluate_single_model.py \
-    --model /home/hermes/workspace/models/models_llm/Qwen3-1.7B \
+    --model "$HOME/workspace/models/models_llm/Qwen3-1.7B" \
     --num_examples 1319 \
     --device cuda:2 \
     --output "${RESULTS_DIR}/eval_single_qwen3_17b_full.json" \

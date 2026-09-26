@@ -44,17 +44,17 @@ try:
 except Exception:
     pass
 
-# Унифицированные утилиты из gsm8k_utils
+# Унифицированные утилиты из dataset_utils
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gsm8k_utils import parse_answer, normalize_answer, compute_accuracy, print_results, save_results
+from dataset_utils import parse_answer, normalize_answer, compute_accuracy, print_results, load_dataset_safe
 
 # ============================================================
 # Модели и конфиг
 # ============================================================
 PLANNER_MODEL = "Qwen/Qwen3-1.7B"
 REFINER_MODEL = "Qwen/Qwen3-1.7B"  # та же модель, что и Planner
-SOLVER_MODEL = "/home/hermes/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct"
-DEFAULT_DEVICE = "cuda:2"
+SOLVER_MODEL = os.path.expanduser("~/workspace/models/models_llm/Qwen2.5-Math-1.5B-Instruct")
+DEFAULT_DEVICE = "cuda:1"
 
 SYSTEM_PROMPT = "You are a helpful assistant."
 
@@ -351,11 +351,19 @@ class RecursiveMASEvaluator:
       3. Solver ← slot injection ← outer_23 → текст
     """
 
+    @staticmethod
+    def _device_str(d):
+        """Convert torch.device to string for device_map, handling cuda:None."""
+        if d.type == "cuda" and d.index is None:
+            return "cuda:0"
+        return str(d)
+
     def __init__(self, args, device):
         self.device = device
         self.num_latent_tokens = args.num_latent_tokens
         self.num_recursive_rounds = args.num_recursive_rounds  # FIX: was missing, original uses 3
         self.model_dtype = torch.bfloat16
+        dev_str = RecursiveMASEvaluator._device_str(device)
 
         # Load models
         print("Loading Planner...")
@@ -365,7 +373,7 @@ class RecursiveMASEvaluator:
             self.planner_tok.pad_token = self.planner_tok.eos_token
         self.planner_model = AutoModelForCausalLM.from_pretrained(
             PLANNER_MODEL, torch_dtype=self.model_dtype,
-            device_map={"": device.index}, trust_remote_code=True)
+            device_map={"": dev_str}, trust_remote_code=True)
         self.planner_model.eval()
         for p in self.planner_model.parameters():
             p.requires_grad = False
@@ -389,7 +397,7 @@ class RecursiveMASEvaluator:
                 self.refiner_tok.pad_token = self.refiner_tok.eos_token
             self.refiner_model = AutoModelForCausalLM.from_pretrained(
                 REFINER_MODEL, torch_dtype=self.model_dtype,
-                device_map={"": device.index}, trust_remote_code=True)
+                device_map={"": dev_str}, trust_remote_code=True)
             self.refiner_model.eval()
             for p in self.refiner_model.parameters():
                 p.requires_grad = False
@@ -404,7 +412,7 @@ class RecursiveMASEvaluator:
             self.solver_tok.pad_token = self.solver_tok.eos_token
         self.solver_model = AutoModelForCausalLM.from_pretrained(
             SOLVER_MODEL, torch_dtype=self.model_dtype,
-            device_map={"": device.index}, trust_remote_code=True)
+            device_map={"": dev_str}, trust_remote_code=True)
         self.solver_model.eval()
         for p in self.solver_model.parameters():
             p.requires_grad = False
@@ -641,8 +649,10 @@ class RecursiveMASEvaluator:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="RecursiveMAS evaluation on GSM8K (совместим с train_outer.py)",
+        description="RecursiveMAS evaluation on GSM8K / Math500 (совместим с train_outer.py)",
     )
+    parser.add_argument("--dataset", type=str, default="gsm8k", choices=["gsm8k", "math500"],
+                        help="Датасет для оценки (default: gsm8k)")
     parser.add_argument("--num_examples", type=int, default=100,
                         help="Количество примеров (default: 100)")
     parser.add_argument("--device", type=str, default=DEFAULT_DEVICE,
@@ -668,10 +678,10 @@ def main():
     print("=" * 70)
     print("RECURSIVEMAS EVALUATION (совместим с train_outer.py)")
     print("=" * 70)
+    print(f"Dataset: {args.dataset}")
     print(f"Device: {device}")
     print(f"Latent tokens per agent: {args.num_latent_tokens}")
     print(f"Recursive rounds: {args.num_recursive_rounds}")
-    print(f"Generation: do_sample=True, temperature=0.6, top_p=0.95, max_new_tokens=1000")
     print(f"Outer checkpoint: {args.outer_checkpoint or 'random'}")
     print(f"Inner checkpoints: {args.inner1_checkpoint or 'random'}, {args.inner2_checkpoint or 'random'}, {args.inner3_checkpoint or 'random'}")
     print()
@@ -679,14 +689,12 @@ def main():
     # Create evaluator
     evaluator = RecursiveMASEvaluator(args, device)
 
-    # Load GSM8K
-    print("\nLoading GSM8K test...")
-    ds = load_gsm8k_test(args.num_examples)
-    questions = ds["question"]
-    answers = ds["answer"]
-    # Парсим ground truth ответы
-    gt_numbers = [normalize_answer(parse_answer(a) or "") for a in answers]
-    print(f"  Загружено {len(questions)} примеров")
+    # Load dataset
+    print(f"\nLoading {args.dataset}...")
+    data = load_dataset_safe(args.dataset, num_examples=args.num_examples)
+    questions = data["questions"]
+    gt_numbers = data["gt_numbers"]
+    print(f"  Loaded {len(questions)} examples")
 
     # Run evaluation
     print(f"\n{'='*70}")
@@ -699,12 +707,13 @@ def main():
     stage_timings = {"planner": [], "outer_12": [], "refiner": [], "outer_23": [], "solver": []}
 
     for i, question in enumerate(questions):
-        if (i + 1) % 10 == 0 or i == 0:
-            print(f"  Обработка {i+1}/{len(questions)}...")
-
         t_start = time.time()
         result = evaluator.evaluate_example(question)
         elapsed = time.time() - t_start
+
+        if (i + 1) % 10 == 0 or i == 0:
+            ts = time.strftime("%H:%M:%S")
+            print(f"  [{ts}] Обработка {i+1}/{len(questions)} | {elapsed:.1f}s/образец | {(i+1)*elapsed:.0f}s total")
 
         predictions.append(result["answer"])
         timings.append(elapsed)
